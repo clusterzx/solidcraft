@@ -2405,6 +2405,14 @@
   "update.up_to_date": "SolidCraft 已是最新版本。",
   "update.update_now": "立即更新",
   "update.you_have": "当前版本为 {version}。",
+  "web.agent.connected": "AI 代理已连接",
+  "web.agent.connecting": "正在连接 AI 代理中继…",
+  "web.agent.disconnect": "断开连接",
+  "web.agent.hint": "AI 代理可以通过中继修改此标签页中的设计。在其工作期间，请保持此标签页在前台。",
+  "web.agent.reconnect": "重新连接",
+  "web.agent.refused": "AI 代理中继拒绝了此标签页的令牌",
+  "web.agent.replaced": "另一个标签页接管了 AI 代理连接",
+  "web.agent.retrying": "无法连接 AI 代理中继，正在重试",
   "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ 选择 · Enter / Tab 补全 · Esc 关闭",
   "↑ ↓ choose · Enter applies what you typed · Esc dismiss": "↑ ↓ 选择 · Enter 按原样应用 · Esc 关闭"
 }

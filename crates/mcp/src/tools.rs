@@ -816,9 +816,14 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
             }
             // Older apps and the headless session, or the app wants the steps one by one.
             Err(e) if e.starts_with("unknown method") || e.starts_with("engine.batch unavailable") => {}
-            // Never sent: no app to send it to. Or sent and still running (it was not cancelled):
-            // the `pending` tool gets its result.
-            Err(e) if e.starts_with(crate::backend::NOT_RUNNING) || e.starts_with(STILL_RUNNING) => {
+            // Never sent: no app to send it to (or the tab in the background refused it unrun). Or
+            // sent and still running (it was not cancelled): the `pending` tool gets its result.
+            Err(e)
+                if e.starts_with(crate::backend::NOT_RUNNING)
+                    || e.starts_with(crate::tab::NO_TAB)
+                    || e.starts_with(solidcraft_engine::control_pending::NOT_RUN_HIDDEN)
+                    || e.starts_with(STILL_RUNNING) =>
+            {
                 return text_result(&Value::String(e), true);
             }
             // The app may have run it: sending the steps again would apply them twice.
@@ -1000,14 +1005,34 @@ fn capture(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<(Vec<u8>, Valu
         (None, None) => {}
     }
     let keep = str_arg(a, "path").filter(|p| !p.trim().is_empty()).map(str::to_string);
-    let path = keep.clone().unwrap_or_else(|| {
-        let n = SHOT.fetch_add(1, Ordering::Relaxed);
-        let dir = crate::scratch_dir().unwrap_or_else(vfs::temp_dir);
-        dir.join(format!("shot-{n}.png")).to_string_lossy().to_string()
-    });
+    // A browser tab sends the picture back in its reply (it can't write this server's files);
+    // a `path` is then one the tab keeps it at too, in its own storage.
+    let inline = b.inline_images();
+    let path = if inline {
+        keep.clone()
+    } else {
+        Some(keep.clone().unwrap_or_else(|| {
+            let n = SHOT.fetch_add(1, Ordering::Relaxed);
+            let dir = crate::scratch_dir().unwrap_or_else(vfs::temp_dir);
+            dir.join(format!("shot-{n}.png")).to_string_lossy().to_string()
+        }))
+    };
+    // Where the picture goes: a file, or the reply.
+    let target = || {
+        let mut params = json!({});
+        if let Some(path) = &path {
+            params["path"] = json!(path);
+        }
+        if inline {
+            params["inline"] = json!(true);
+        }
+        params
+    };
     let size = |k: &str, d: u64| a.get(k).and_then(Value::as_u64).unwrap_or(d).clamp(16, 4096);
     let render = |b: &mut dyn Backend| {
-        let mut params = json!({"path": path, "width": size("width", 960), "height": size("height", 600)});
+        let mut params = target();
+        params["width"] = json!(size("width", 960));
+        params["height"] = json!(size("height", 600));
         for (k, v) in &guides {
             params[*k] = json!(v);
         }
@@ -1016,7 +1041,7 @@ fn capture(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<(Vec<u8>, Valu
     let asked_window = str_arg(a, "source") == Some("window");
     let mut fallback = None;
     let (info, source) = if window {
-        match b.call("ui.screenshot", json!({"path": path})) {
+        match b.call("ui.screenshot", target()) {
             Ok(v) => (v, "window"),
             // Asked for the window: say why there is none, so the caller can show it or ask for
             // a model render (#1677).
@@ -1032,11 +1057,17 @@ fn capture(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<(Vec<u8>, Valu
     } else {
         (render(b)?, "model")
     };
-    let read = vfs::read(&path, MAX_IMAGE_BYTES).map_err(|e| format!("{path}: {e} (is the app on another machine?)"));
-    if keep.is_none() {
-        let _ = vfs::remove(&path);
-    }
-    let png = read?;
+    let png = match (&path, inline) {
+        (_, true) => inline_png(&info)?,
+        (Some(path), false) => {
+            let read = vfs::read(path, MAX_IMAGE_BYTES).map_err(|e| format!("{path}: {e} (is the app on another machine?)"));
+            if keep.is_none() {
+                let _ = vfs::remove(path);
+            }
+            read?
+        }
+        (None, false) => return Err("screenshot: no file to read the picture from".into()),
+    };
     let (w, h) = match source {
         "model" => (json!(size("width", 960)), json!(size("height", 600))),
         _ => (info.get("width").cloned().unwrap_or(Value::Null), info.get("height").cloned().unwrap_or(Value::Null)),
@@ -1053,6 +1084,48 @@ fn capture(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<(Vec<u8>, Valu
         }
     }
     Ok((png, reply))
+}
+
+/// The PNG an `inline` screenshot or render reply carries (`png_base64`).
+fn inline_png(info: &Value) -> Result<Vec<u8>, String> {
+    let Some(data) = info.get("png_base64").and_then(Value::as_str) else {
+        return Err("screenshot: the app sent no picture (`png_base64`); it may be older than this server".into());
+    };
+    let png = unbase64(data, MAX_IMAGE_BYTES).map_err(|e| format!("screenshot: the picture the app sent is not usable ({e})"))?;
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("screenshot: the picture the app sent is not a PNG".into());
+    }
+    Ok(png)
+}
+
+/// Decode standard base64 (RFC 4648, padding optional), refusing anything over `max` bytes.
+pub(crate) fn unbase64(text: &str, max: usize) -> Result<Vec<u8>, String> {
+    let text = text.trim_end_matches('=');
+    if text.len() / 4 * 3 > max {
+        return Err(format!("over {max} bytes"));
+    }
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(text.len() / 4 * 3 + 2);
+    for chunk in text.as_bytes().chunks(4) {
+        if chunk.len() == 1 {
+            return Err("truncated base64".into());
+        }
+        let mut n = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            let v = value(*c).ok_or("not base64")?;
+            n |= u32::from(v) << (18 - 6 * i as u32);
+        }
+        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+        out.extend_from_slice(bytes.get(..chunk.len() - 1).unwrap_or(&[]));
+    }
+    Ok(out)
 }
 
 /// Standard base64 with padding (RFC 4648).

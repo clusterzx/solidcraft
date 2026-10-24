@@ -514,7 +514,7 @@ pub struct SolveApp {
     pub agent: agent_cursor::AgentCursor,
     /// The agent chat panel (docs/design/in-app-agent-chat.md).
     pub agent_chat: agent_chat::AgentChat,
-    pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
+    pending_shots: Vec<PendingShot>,
     queued_shots: Vec<(u64, f64, u32)>,
     shot_token: u64,
     styled: bool,
@@ -1888,11 +1888,11 @@ impl SolveApp {
             control::Outcome::Screenshot { .. } if window_hidden(ctx) => {
                 let _ = reply.send(json!({"ok": false, "hidden": true, "error": "no frame was presented (window hidden?); use ui.render"}));
             }
-            control::Outcome::Screenshot { path } => {
+            control::Outcome::Screenshot { path, inline } => {
                 self.shot_token += 1;
                 let token = self.shot_token;
                 self.queued_shots.push((token, now_ms() + 150.0, 0));
-                self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
+                self.pending_shots.push(PendingShot { token, path, inline, reply, deadline: now_ms() + 8000.0 });
             }
         }
         ctx.request_repaint();
@@ -1933,22 +1933,33 @@ impl SolveApp {
         });
         for (token, image) in events {
             issue_report::receive(self, token, image.clone());
-            if let Some(i) = self.pending_shots.iter().position(|(t, ..)| *t == token) {
-                let (_, path, reply, _) = self.pending_shots.remove(i);
-                let _ = reply.send(control::save_screenshot(&image, path.as_deref()));
+            if let Some(i) = self.pending_shots.iter().position(|s| s.token == token) {
+                let shot = self.pending_shots.remove(i);
+                let _ = shot.reply.send(control::screenshot_reply(&image, shot.path.as_deref(), shot.inline));
             }
         }
         let now = now_ms();
         // Hidden while waiting: no frame is coming.
         let hidden = window_hidden(ctx);
-        self.pending_shots.retain(|(_, _, reply, deadline)| {
-            if now < *deadline && !hidden {
+        self.pending_shots.retain(|shot| {
+            if now < shot.deadline && !hidden {
                 return true;
             }
-            let _ = reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
+            let _ = shot.reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
             false
         });
     }
+}
+
+/// A `ui.screenshot` waiting for its frame: where the picture goes and who waits for it.
+pub(crate) struct PendingShot {
+    pub(crate) token: u64,
+    pub(crate) path: Option<String>,
+    /// The picture goes back in the reply (`png_base64`).
+    pub(crate) inline: bool,
+    pub(crate) reply: std::sync::mpsc::Sender<Value>,
+    /// When to give up waiting (ms).
+    pub(crate) deadline: f64,
 }
 
 /// The window is minimised or fully covered, so it presents no frames (#1677). Unknown counts as

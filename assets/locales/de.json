@@ -2153,5 +2153,13 @@
   "update.up_to_date": "SolidCraft ist aktuell.",
   "update.update_now": "Jetzt aktualisieren",
   "update.you_have": "Installiert ist {version}.",
+  "web.agent.connected": "KI-Agent verbunden",
+  "web.agent.connecting": "Verbindung zum KI-Agenten-Relay wird hergestellt…",
+  "web.agent.disconnect": "Trennen",
+  "web.agent.hint": "Ein KI-Agent kann über das Relay das Design in diesem Tab ändern. Lassen Sie diesen Tab im Vordergrund, solange er arbeitet.",
+  "web.agent.reconnect": "Erneut verbinden",
+  "web.agent.refused": "Das KI-Agenten-Relay hat das Token dieses Tabs abgelehnt",
+  "web.agent.replaced": "Ein anderer Tab hat die KI-Agenten-Verbindung übernommen",
+  "web.agent.retrying": "KI-Agenten-Relay nicht erreichbar; neuer Versuch folgt",
   "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ auswählen · Eingabe / Tab vervollständigen · Esc schließen"
 }

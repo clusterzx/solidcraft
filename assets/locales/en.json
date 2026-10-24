@@ -2405,6 +2405,14 @@
   "update.up_to_date": "SolidCraft is up to date.",
   "update.update_now": "Update now",
   "update.you_have": "You have {version}.",
+  "web.agent.connected": "AI agent connected",
+  "web.agent.connecting": "Connecting to the AI agent relay…",
+  "web.agent.disconnect": "Disconnect",
+  "web.agent.hint": "An AI agent can change the design in this tab through the relay. Keep this tab in front while it works.",
+  "web.agent.reconnect": "Reconnect",
+  "web.agent.refused": "The AI agent relay refused this tab's token",
+  "web.agent.replaced": "Another tab took over the AI agent connection",
+  "web.agent.retrying": "AI agent relay not reachable; trying again",
   "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ choose · Enter / Tab complete · Esc dismiss",
   "↑ ↓ choose · Enter applies what you typed · Esc dismiss": "↑ ↓ choose · Enter applies what you typed · Esc dismiss"
 }
