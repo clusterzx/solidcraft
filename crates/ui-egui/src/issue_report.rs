@@ -1237,7 +1237,7 @@ mod tests {
         begin(&mut app, &ctx, None, None);
         let token = app.issue_report.pending.as_ref().unwrap().token;
         let (reply, _receiver) = std::sync::mpsc::channel();
-        app.pending_shots.push((token + 1, None, reply, crate::now_ms() + 8000.0));
+        app.pending_shots.push(crate::PendingShot { token: token + 1, path: None, inline: false, reply, deadline: crate::now_ms() + 8000.0 });
         app.shot_token = token + 1;
         let image = Arc::new(ColorImage::new([4, 3], vec![egui::Color32::GREEN; 12]));
         receive(&mut app, token + 1, image.clone());

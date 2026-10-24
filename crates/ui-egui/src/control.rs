@@ -20,10 +20,11 @@
 //! - `ui.click {x, y, button?, shift?}`, `ui.move {x, y}`: real
 //!   pointer input in screen points; `ui.scroll {x, y, delta}`: mouse-wheel input in
 //!   points (zooms); `ui.key {key, cmd?, shift?}`, `ui.text {text}`
-//! - `ui.screenshot {path?}`: PNG of the window; `ui.render {path, width?, height?, grid?, axes?}`:
-//!   headless CPU render of the model with the current camera, in the window's theme, with the
-//!   section the viewport shows (no window needed); the ground grid and the origin's axes as the
-//!   window shows them, unless `grid` or `axes` says
+//! - `ui.screenshot {path?, inline?}`: PNG of the window; `ui.render {path?, inline?, width?, height?,
+//!   grid?, axes?}`: headless CPU render of the model with the current camera, in the window's
+//!   theme, with the section the viewport shows (no window needed); the ground grid and the
+//!   origin's axes as the window shows them, unless `grid` or `axes` says. `inline: true` puts the
+//!   PNG in the reply as `png_base64` (a browser tab, whose files a server can't read)
 //! - `ui.icon_audit {reset?, stop?}`: collect/drain requested icon names, resolved masters and placeholder flags;
 //! - `ui.menu {x?, y?, target?, close?}`: open a context menu at a point (the viewport's marking
 //!   menu, or a browser menu with `target: {type: body|sketch|component, …}`); without a point,
@@ -69,7 +70,12 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Value),
-    Screenshot { path: Option<String> },
+    /// A picture of the window, taken when the next frame is presented: saved at `path` (or a
+    /// temporary file), or with `inline` sent back in the reply (and saved at `path` if given).
+    Screenshot {
+        path: Option<String>,
+        inline: bool,
+    },
 }
 
 fn ok(v: Value) -> Outcome {
@@ -798,7 +804,7 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
         }
         "ui.screenshot" => match s("path").map(vfs::check) {
             Some(Err(e)) => err(e),
-            _ => Outcome::Screenshot { path: s("path").map(str::to_string) },
+            _ => Outcome::Screenshot { path: s("path").map(str::to_string), inline: b("inline") },
         },
         "ui.render" => {
             let w = f("width").unwrap_or(1280.0).clamp(16.0, 8192.0) as u32;
@@ -821,13 +827,20 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
             };
             // What drew it (gpu, gpu-software or cpu), and the warning a CPU render carries.
             let (renderer, warning) = (png.renderer, solidcraft_engine::capture::warning(png.renderer));
-            match s("path") {
-                Some(path) => match vfs::check(path).and_then(|()| std::fs::write(path, &png.bytes)) {
-                    Ok(()) => ok(json!({"path": path, "bytes": png.bytes.len(), "renderer": renderer, "warning": warning})),
-                    Err(e) => err(e),
+            let mut reply = match s("path") {
+                // In the browser, the path is in its own storage (/opfs/…).
+                Some(path) => match vfs::write(path, &png.bytes) {
+                    Ok(()) => json!({"path": path, "bytes": png.bytes.len(), "renderer": renderer, "warning": warning}),
+                    Err(e) => return err(e),
                 },
-                None => ok(json!({"bytes": png.bytes.len(), "renderer": renderer, "warning": warning})),
+                None => json!({"bytes": png.bytes.len(), "renderer": renderer, "warning": warning}),
+            };
+            if b("inline") {
+                reply["width"] = json!(w);
+                reply["height"] = json!(h);
+                reply["png_base64"] = json!(crate::agent_chat::backend::base64(&png.bytes));
             }
+            ok(reply)
         }
         "app.quit" => {
             // `force`: quit without asking about unsaved designs.
@@ -932,6 +945,23 @@ fn occurrence(s: &solidcraft_engine::Session, v: &Value) -> Result<u64, String> 
         .map(|o| o.id)
         .or_else(|| s.doc.find_component(&key).and_then(|c| s.doc.occurrence_of(c)).map(|o| o.id))
         .ok_or_else(|| format!("no occurrence `{key}`"))
+}
+
+/// A screenshot as the reply to `ui.screenshot`: saved as a PNG file ([`save_screenshot`]), or
+/// with `inline` sent back in the reply as `png_base64` (and kept at `path` too, when given).
+pub fn screenshot_reply(image: &egui::ColorImage, path: Option<&str>, inline: bool) -> Value {
+    if !inline {
+        return save_screenshot(image, path);
+    }
+    let [w, h] = image.size;
+    let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+    let Some(png) = solidcraft_engine::render::png(w, h, rgba) else { return json!({"ok": false, "error": "PNG encoding failed"}) };
+    if let Some(path) = path
+        && let Err(e) = vfs::write(path, &png)
+    {
+        return json!({"ok": false, "error": format!("{path}: {e}")});
+    }
+    json!({"ok": true, "result": {"path": path, "width": w, "height": h, "bytes": png.len(), "png_base64": crate::agent_chat::backend::base64(&png)}})
 }
 
 /// Save a screenshot PNG.
@@ -1050,6 +1080,43 @@ mod tests {
             Outcome::Screenshot { .. } => panic!("ui.render took a screenshot"),
         }
         std::fs::read(path).unwrap()
+    }
+
+    /// `inline`: the picture comes back in the reply as `png_base64`, for a browser tab, whose
+    /// files a server can't read (docs/web-mcp.md). Without it nothing changes.
+    #[test]
+    fn screenshots_and_renders_can_come_back_inline() {
+        let mut app = SolveApp::new(Session::default(), Services::default());
+        let ctx = crate::fonts::test_context();
+        let (req, _rx) = ControlRequest::new("ui.screenshot", json!({"inline": true}));
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Screenshot { path: None, inline: true }));
+        let (req, _rx) = ControlRequest::new("ui.screenshot", json!({}));
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::Screenshot { path: None, inline: false }));
+        let image = egui::ColorImage::new([4, 3], vec![egui::Color32::GREEN; 12]);
+        let r = screenshot_reply(&image, None, true);
+        assert_eq!((&r["ok"], &r["result"]["width"], &r["result"]["height"]), (&json!(true), &json!(4), &json!(3)), "{r}");
+        let png = solidcraft_engine::doc::canvas::base64_decode(r["result"]["png_base64"].as_str().unwrap()).unwrap();
+        assert_eq!(r["result"]["bytes"], json!(png.len()));
+        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!((decoded.width(), decoded.height(), decoded.get_pixel(1, 1).0), (4, 3, [0, 255, 0, 255]));
+        // Kept at a path as well.
+        let dir = std::env::temp_dir().join(format!("solidcraft-inline-shot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shot.png").to_string_lossy().to_string();
+        let r = screenshot_reply(&image, Some(&path), true);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            solidcraft_engine::doc::canvas::base64_decode(r["result"]["png_base64"].as_str().unwrap()).unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        // A render the same way, where a renderer draws.
+        if !crate::gpu::test_picture_renderer() {
+            return;
+        }
+        let (req, _rx) = ControlRequest::new("ui.render", json!({"inline": true, "width": 40, "height": 30}));
+        let Outcome::Done(v) = handle(&mut app, &ctx, &req) else { panic!("ui.render took a screenshot") };
+        let png = solidcraft_engine::doc::canvas::base64_decode(v["result"]["png_base64"].as_str().unwrap()).unwrap();
+        assert_eq!(image::load_from_memory(&png).unwrap().width(), 40, "{v}");
     }
 
     /// `ui.render` draws in the window's theme (#974): its background is the viewport's, light
@@ -1392,7 +1459,7 @@ mod tests {
             let (req, _rx) = ControlRequest::new(method, params);
             match handle(&mut app, &crate::fonts::test_context(), &req) {
                 Outcome::Done(v) => v,
-                Outcome::Screenshot { path } => json!({"ok": true, "screenshot": path}),
+                Outcome::Screenshot { path, .. } => json!({"ok": true, "screenshot": path}),
             }
         };
         let export = |p: String| json!({"command": "file.export", "params": {"path": p}});

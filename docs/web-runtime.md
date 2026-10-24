@@ -22,7 +22,7 @@ Access import/export. That works for small and medium designs but hits three wal
 |------|------------------------|
 | Quota | Large STEP imports and container blobs compete with autosave and cache in OPFS |
 | Main thread | Open, save, and timeline evaluation run synchronously on the UI thread with egui |
-| Agents | MCP runs out of process (`solidcraft-cli mcp`); the tab has no first-class agent session |
+| Agents | MCP runs out of process (`solidcraft-cli mcp`, or [solidcraft-relay](web-mcp.md), which reaches a tab over a WebSocket the tab opens); the tab has no agent session of its own |
 
 WebGPU for the viewport already runs on the main thread (wgpu via eframe). Moving the entire UI
 renderer into a worker is out of scope for the first integration; worker GPU is for offload jobs

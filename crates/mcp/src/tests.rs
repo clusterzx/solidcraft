@@ -2111,3 +2111,350 @@ fn describe_command_and_strict_parameter_checking() {
     let m = tool(&mut s, "measure", json!({}));
     assert_eq!(m["body_count"], json!(0), "{m}");
 }
+
+/// A tiny PNG (1 × 1): what a browser tab sends back inline.
+const PNG_1X1: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\rIDATx\x9cc\xf8\xff\xff?\0\x05\xfe\x02\xfe\xa7\x35\x81\x84\0\0\0\0IEND\xaeB`\x82";
+
+#[test]
+fn unbase64_reverses_base64_and_refuses_junk() {
+    for data in [&b""[..], b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar", PNG_1X1] {
+        assert_eq!(crate::tools::unbase64(&crate::tools::base64(data), 1 << 20).unwrap(), data);
+    }
+    assert_eq!(crate::tools::unbase64("Zm9vYg", 64).unwrap(), b"foob", "padding is optional");
+    for junk in ["Zm9v!", "Z", "Zm9vY", "Zm 9v"] {
+        assert!(crate::tools::unbase64(junk, 64).is_err(), "{junk}");
+    }
+    assert!(crate::tools::unbase64(&"A".repeat(400), 100).is_err(), "too large");
+}
+
+/// A browser tab can't write this server's files: its pictures come back in the reply. The
+/// screenshot tool then asks for them inline, touches no file of its own, and a `path` is one
+/// the tab keeps the picture at too.
+#[test]
+fn inline_screenshots_come_back_in_the_reply() {
+    struct Tab {
+        calls: Vec<(String, Value)>,
+        hidden: bool,
+        reply: Value,
+    }
+    impl crate::backend::Backend for Tab {
+        fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+            self.calls.push((method.to_string(), params.clone()));
+            match method {
+                "ui.screenshot" if self.hidden => Err("no frame was presented (window hidden?); use ui.render".into()),
+                "ui.render" | "ui.screenshot" => Ok(self.reply.clone()),
+                other => Err(format!("unknown method `{other}`")),
+            }
+        }
+        fn has_ui(&self) -> bool {
+            true
+        }
+        fn describe(&self) -> String {
+            "tab".into()
+        }
+        fn inline_images(&self) -> bool {
+            true
+        }
+    }
+    let good = json!({"width": 1, "height": 1, "png_base64": crate::tools::base64(PNG_1X1)});
+    let mut tab = Tab { calls: Vec::new(), hidden: false, reply: good.clone() };
+    let r = crate::tools::call_tool(&mut tab, "screenshot", &json!({}));
+    assert!(r["isError"] != json!(true), "{r}");
+    assert_eq!(r["content"][0]["type"], "image", "{r}");
+    assert_eq!(r["content"][0]["data"], good["png_base64"], "{r}");
+    let info: Value = serde_json::from_str(r["content"][1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((&info["source"], &info["bytes"], &info["path"]), (&json!("window"), &json!(PNG_1X1.len()), &Value::Null), "{info}");
+    assert_eq!(tab.calls, [("ui.screenshot".to_string(), json!({"inline": true}))]);
+    // A path goes to the tab with the request; the picture still comes back in the reply.
+    let mut tab = Tab { calls: Vec::new(), hidden: true, reply: good.clone() };
+    let r = crate::tools::call_tool(&mut tab, "screenshot", &json!({"path": "/opfs/shot.png", "width": 64, "height": 48}));
+    assert!(r["isError"] != json!(true), "{r}");
+    assert_eq!(
+        tab.calls,
+        [
+            ("ui.screenshot".to_string(), json!({"inline": true, "path": "/opfs/shot.png"})),
+            ("ui.render".to_string(), json!({"inline": true, "path": "/opfs/shot.png", "width": 64, "height": 48})),
+        ]
+    );
+    // Without a picture, or with something that is not a PNG, the tool says so.
+    for (reply, want) in [
+        (json!({"width": 1, "height": 1}), "png_base64"),
+        (json!({"png_base64": "!!!"}), "not usable"),
+        (json!({"png_base64": crate::tools::base64(b"GIF89a")}), "not a PNG"),
+    ] {
+        let mut tab = Tab { calls: Vec::new(), hidden: false, reply };
+        let r = crate::tools::call_tool(&mut tab, "screenshot", &json!({}));
+        assert_eq!(r["isError"], json!(true), "{r}");
+        assert!(r["content"][0]["text"].as_str().unwrap().contains(want), "{r}");
+    }
+}
+
+/// The headless session renders inline too (the relay's own session, docs/web-mcp.md), without
+/// a path, and refuses a render with neither.
+#[test]
+fn headless_renders_inline() {
+    let mut h = Headless::default();
+    use crate::backend::Backend as _;
+    assert_eq!(h.call("ui.render", json!({"width": 32, "height": 32})).unwrap_err(), "missing `path`");
+    // Without a GPU, the CPU rasterizer the relay installs (it draws in a container).
+    if !renders() {
+        solidcraft_engine::capture::install(std::sync::Arc::new(|scene, cam, w, h| {
+            let canvas = solidcraft_engine::render::render(scene, cam, w as usize, h as usize);
+            Ok(solidcraft_engine::capture::Picture { rgba: canvas.rgba, renderer: "cpu" })
+        }));
+    }
+    h.call("engine.execute", json!({"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}})).unwrap();
+    let r = h.call("ui.render", json!({"inline": true, "width": 32, "height": 24})).unwrap();
+    let png = crate::tools::unbase64(r["png_base64"].as_str().unwrap(), 1 << 20).unwrap();
+    assert!(png.starts_with(b"\x89PNG") && r["path"].is_null() && r["bytes"] == json!(png.len()), "{r}");
+}
+
+/// A link to a pretend browser tab: `answer` replies at once, or (`None`) holds the request for
+/// the test to answer later; dropping a held one is the tab going away.
+struct FakeLink {
+    tab: std::sync::Mutex<Option<u64>>,
+    answer: Box<dyn Fn(&str, &Value) -> Option<Value> + Send + Sync>,
+    held: std::sync::Mutex<Vec<(String, std::sync::mpsc::Sender<Value>)>>,
+    sent: std::sync::Mutex<Vec<String>>,
+}
+
+impl FakeLink {
+    fn new(tab: Option<u64>, answer: impl Fn(&str, &Value) -> Option<Value> + Send + Sync + 'static) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self { tab: std::sync::Mutex::new(tab), answer: Box::new(answer), held: Default::default(), sent: Default::default() })
+    }
+    fn set_tab(&self, tab: Option<u64>) {
+        *self.tab.lock().unwrap() = tab;
+        if tab.is_none() {
+            self.held.lock().unwrap().clear();
+        }
+    }
+    fn release(&self, reply: Value) {
+        let (_, tx) = self.held.lock().unwrap().remove(0);
+        tx.send(reply).unwrap();
+    }
+    fn sent(&self) -> Vec<String> {
+        self.sent.lock().unwrap().clone()
+    }
+}
+
+impl crate::TabLink for FakeLink {
+    fn send(&self, method: &str, params: Value) -> Result<std::sync::mpsc::Receiver<Value>, String> {
+        if self.tab.lock().unwrap().is_none() {
+            return Err("no tab".into());
+        }
+        let what = match params["command"].as_str() {
+            Some(c) => format!("{method} {c}"),
+            None => method.to_string(),
+        };
+        self.sent.lock().unwrap().push(what.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        match (self.answer)(method, &params) {
+            Some(reply) => tx.send(reply).unwrap(),
+            None => self.held.lock().unwrap().push((what, tx)),
+        }
+        Ok(rx)
+    }
+    fn connection(&self) -> Option<u64> {
+        *self.tab.lock().unwrap()
+    }
+    fn running(&self) -> Value {
+        json!({"running": self.held.lock().unwrap().iter().map(|(w, _)| w.clone()).collect::<Vec<_>>()})
+    }
+}
+
+fn tab_waits(reply_ms: u64) -> crate::TabWaits {
+    use std::time::Duration;
+    crate::TabWaits { reply: Duration::from_millis(reply_ms), batch: Duration::from_millis(reply_ms), settle: Duration::from_millis(50) }
+}
+
+fn tab_server(link: std::sync::Arc<FakeLink>, mode: crate::HeadlessMode, waits: crate::TabWaits) -> Server {
+    let headless = (mode != crate::HeadlessMode::Off).then(|| std::sync::Arc::new(crate::SharedHeadless::new(std::env::temp_dir())));
+    let backend = crate::TabBackend::new(link, mode, headless, "https://cad.example/").with_waits(waits);
+    let mut s = Server::new(Box::new(backend));
+    let r = call(&mut s, 1, "initialize", json!({"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}));
+    assert_eq!(r["result"]["protocolVersion"], "2025-03-26", "{r}");
+    assert_eq!(s.protocol_version(), Some("2025-03-26"));
+    s
+}
+
+fn ok(result: Value) -> Option<Value> {
+    Some(json!({"ok": true, "result": result}))
+}
+
+/// Without a tab nothing is sent: every call says how to connect one, and a batch says it was
+/// not run (so it may be sent again as it is).
+#[test]
+fn without_a_tab_calls_say_how_to_connect_one() {
+    let link = FakeLink::new(None, |_, _| ok(json!({})));
+    let mut s = tab_server(link.clone(), crate::HeadlessMode::Off, tab_waits(1000));
+    let r = call(&mut s, 2, "initialize", json!({}));
+    let instructions = r["result"]["instructions"].as_str().unwrap();
+    assert!(
+        instructions.contains("Backend: connected to the SolidCraft app in a browser tab") && instructions.contains("No tab was connected"),
+        "{instructions}"
+    );
+    for (name, args) in [("execute", json!({"command": "solid.box"})), ("inspect_design", json!({})), ("screenshot", json!({}))] {
+        let r = raw_tool(&mut s, name, args);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(text.starts_with(crate::tab::NO_TAB) && text.contains("https://cad.example/#mcp=<token>"), "{name}: {text}");
+    }
+    let r = raw_tool(&mut s, "batch", json!({"commands": [{"command": "solid.box"}]}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with(crate::tab::NO_TAB) && !text.contains("may have run"), "{text}");
+    assert_eq!(tool(&mut s, "pending", json!({}))["pending"], Value::Null);
+    assert!(link.sent().is_empty());
+}
+
+/// Connected: requests go to the tab and its replies are the results; screenshots come back
+/// inline; `running` is the tab's list.
+#[test]
+fn a_connected_tab_answers_tool_calls() {
+    let link = FakeLink::new(Some(1), |method, params| match (method, params["command"].as_str()) {
+        ("engine.execute", Some("solid.box")) => ok(json!({"feature": 1, "created_bodies": ["Body1"]})),
+        ("engine.execute", Some(c)) => Some(json!({"ok": false, "error": format!("unknown command `{c}`")})),
+        ("engine.batch", _) => ok(json!({"completed": 1, "results": [{"ran": true}], "undone": 0})),
+        ("ui.screenshot", _) => ok(json!({"width": 1, "height": 1, "png_base64": crate::tools::base64(PNG_1X1)})),
+        (m, _) => Some(json!({"ok": false, "error": format!("unknown method `{m}`")})),
+    });
+    let mut s = tab_server(link.clone(), crate::HeadlessMode::Off, tab_waits(1000));
+    assert_eq!(tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 1}}))["created_bodies"], json!(["Body1"]));
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.nope"}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert_eq!(tool(&mut s, "batch", json!({"commands": [{"command": "solid.box"}]}))["completed"], 1);
+    let r = raw_tool(&mut s, "screenshot", json!({}));
+    assert_eq!(r["result"]["content"][0]["type"], "image", "{r}");
+    assert_eq!(tool(&mut s, "running", json!({}))["running"], json!([]));
+    assert_eq!(link.sent(), ["engine.execute solid.box", "engine.execute solid.nope", "engine.batch", "ui.screenshot"]);
+}
+
+/// A request that outlasts its wait keeps running in the tab: the call says so, the next call
+/// waits for it first, and `pending` returns its result. A tab that goes away loses it.
+#[test]
+fn a_request_still_running_in_the_tab_is_left_to_pending() {
+    let link = FakeLink::new(Some(1), |method, params| match params["command"].as_str() {
+        Some("solid.fillet") => None,
+        _ => ok(json!({"ran": method})),
+    });
+    let mut s = tab_server(link.clone(), crate::HeadlessMode::Off, tab_waits(50));
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.fillet"}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with(crate::backend::STILL_RUNNING) && text.contains("still apply") && text.contains("`pending`"), "{text}");
+    assert_eq!(tool(&mut s, "running", json!({}))["running"], json!(["engine.execute solid.fillet"]));
+    // Still running: the next call is not sent.
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.box"}));
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("an earlier request"), "{r}");
+    let p = tool(&mut s, "pending", json!({}));
+    assert_eq!((&p["done"], &p["pending"]), (&json!(false), &json!("`engine.execute` (solid.fillet)")), "{p}");
+    link.release(json!({"ok": true, "result": {"filleted": true}}));
+    let p = tool(&mut s, "pending", json!({}));
+    assert_eq!((&p["done"], &p["result"]), (&json!(true), &json!({"filleted": true})), "{p}");
+    assert_eq!(tool(&mut s, "pending", json!({}))["pending"], Value::Null);
+    assert_eq!(tool(&mut s, "execute", json!({"command": "solid.box"}))["ran"], "engine.execute");
+    assert_eq!(link.sent(), ["engine.execute solid.fillet", "engine.execute solid.box"], "the refused call never reached the tab");
+    // Gone while running: the call may have run.
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.fillet"}));
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().starts_with(crate::backend::STILL_RUNNING), "{r}");
+    link.set_tab(None);
+    let r = raw_tool(&mut s, "pending", json!({}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(r["result"]["isError"] == true && text.contains("lost") && text.contains("inspect the design"), "{text}");
+}
+
+/// A reply the tab never sends because it went away mid-call: the call may have run.
+#[test]
+fn a_tab_that_goes_away_mid_call_may_have_run_it() {
+    use crate::TabLink as _;
+    let link = FakeLink::new(Some(1), |_, _| None);
+    let mut s = tab_server(link.clone(), crate::HeadlessMode::Off, tab_waits(5000));
+    let closer = link.clone();
+    let t = std::thread::spawn(move || {
+        while closer.running()["running"].as_array().is_none_or(Vec::is_empty) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        closer.set_tab(None);
+    });
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.box"}));
+    t.join().unwrap();
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("went away during this call") && text.contains("Inspect the design"), "{text}");
+}
+
+/// A tab in the background refuses requests unrun; a batch it refused may be sent again.
+#[test]
+fn a_hidden_tab_refuses_a_batch_unrun() {
+    let hidden = format!("{}, where the browser pauses it", solidcraft_engine::control_pending::NOT_RUN_HIDDEN);
+    let link = FakeLink::new(Some(1), move |_, _| Some(json!({"ok": false, "error": hidden})));
+    let mut s = tab_server(link, crate::HeadlessMode::Off, tab_waits(1000));
+    let r = raw_tool(&mut s, "batch", json!({"commands": [{"command": "solid.box"}]}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("not run:") && !text.contains("may have run"), "{text}");
+}
+
+/// The agent hears when its calls start going to another design: a new or reloaded tab, or
+/// (fallback) the relay's own headless session while no tab is connected.
+#[test]
+fn a_change_of_tab_or_session_is_told_once() {
+    let notices = |r: &Value| -> Vec<String> {
+        r["result"]["content"].as_array().unwrap().iter().skip(1).filter_map(|c| c["text"].as_str().map(str::to_string)).collect()
+    };
+    let link = FakeLink::new(Some(1), |_, _| ok(json!({"bodies": []})));
+    let mut s = tab_server(link.clone(), crate::HeadlessMode::Off, tab_waits(1000));
+    assert!(notices(&raw_tool(&mut s, "execute", json!({"command": "edit.undo"}))).is_empty());
+    link.set_tab(Some(2));
+    let n = notices(&raw_tool(&mut s, "execute", json!({"command": "edit.undo"})));
+    assert!(n.len() == 1 && n[0].contains("Another SolidCraft tab"), "{n:?}");
+    assert!(notices(&raw_tool(&mut s, "execute", json!({"command": "edit.undo"}))).is_empty(), "told once");
+
+    let link = FakeLink::new(None, |_, _| ok(json!({"from": "tab"})));
+    let mut s = tab_server(link.clone(), crate::HeadlessMode::Fallback, tab_waits(1000));
+    let r = call(&mut s, 2, "initialize", json!({}));
+    assert!(r["result"]["instructions"].as_str().unwrap().contains("headless session instead"), "{r}");
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}));
+    assert!(r["result"]["isError"] != true, "{r}");
+    let n = notices(&r);
+    assert!(n.len() == 1 && n[0].contains("headless session"), "{n:?}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], json!(1), "the headless session ran it");
+    link.set_tab(Some(7));
+    let r = raw_tool(&mut s, "execute", json!({"command": "edit.undo"}));
+    assert_eq!(serde_json::from_str::<Value>(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap()["from"], "tab");
+    assert!(notices(&r).iter().any(|n| n.contains("ran in the tab")), "{r}");
+    link.set_tab(None);
+    let r = raw_tool(&mut s, "execute", json!({"command": "edit.undo"}));
+    assert!(notices(&r).iter().any(|n| n.contains("tab went away")), "{r}");
+
+    // Only: the relay's own session, whatever tab is connected, and nothing to tell.
+    let link = FakeLink::new(Some(1), |_, _| ok(json!({"from": "tab"})));
+    let mut s = tab_server(link.clone(), crate::HeadlessMode::Only, tab_waits(1000));
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}));
+    assert!(r["result"]["isError"] != true && notices(&r).is_empty(), "{r}");
+    assert!(link.sent().is_empty());
+}
+
+/// The relay's headless session reaches only its own folder on the server.
+#[test]
+fn the_relays_headless_session_stays_in_its_folder() {
+    let dir = std::env::temp_dir().join(format!("solidcraft-relay-headless-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let headless = std::sync::Arc::new(crate::SharedHeadless::new(dir.clone()));
+    let link = FakeLink::new(None, |_, _| None);
+    let mut s = Server::new(Box::new(crate::TabBackend::new(link, crate::HeadlessMode::Only, Some(headless), "https://cad.example/")));
+    tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}));
+    let inside = dir.join("part.solidcraft").to_string_lossy().to_string();
+    tool(&mut s, "save", json!({"path": inside}));
+    assert!(std::path::Path::new(&inside).is_file());
+    let outside = std::env::temp_dir().join(format!("solidcraft-relay-outside-{}.solidcraft", std::process::id()));
+    let r = raw_tool(&mut s, "save", json!({"path": outside.to_string_lossy()}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(!outside.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn shared_headless_can_be_shared_between_threads() {
+    fn shared<T: Send + Sync>() {}
+    shared::<crate::SharedHeadless>();
+    assert_eq!(crate::HeadlessMode::parse(" Fallback "), Some(crate::HeadlessMode::Fallback));
+    assert_eq!(crate::HeadlessMode::parse(""), Some(crate::HeadlessMode::Off));
+    assert_eq!(crate::HeadlessMode::parse("sometimes"), None);
+}

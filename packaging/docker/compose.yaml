@@ -1,19 +1,25 @@
-# Self-host SolidCraft in the browser (see "Self-hosting with Docker" in the book's Getting started).
-# From this folder, or from anywhere with -f packaging/docker/compose.yaml:
+# Self-host SolidCraft in the browser (see "Self-hosting with Docker" in the book's Getting started),
+# with solidcraft-relay, the MCP server that lets an AI agent drive the design open in a browser
+# tab (docs/web-mcp.md). From this folder, or from anywhere with -f packaging/docker/compose.yaml:
 #
-#   docker compose up -d             the published image from GitHub's container registry
-#   docker compose pull && docker compose up -d     update to the latest release
-#   docker compose up -d --build     build the image from this checkout instead
+#   cp .env.example .env             then set SOLIDCRAFT_RELAY_TOKEN in it (openssl rand -hex 32)
+#   docker compose up -d             the published images from GitHub's container registry
+#   docker compose pull && docker compose up -d     update
+#   docker compose up -d --build     build the images from this checkout instead
 #
 # SOLIDCRAFT_PORT picks the host port (default 8080). Saving designs needs HTTPS or localhost:
-# on a server, put a TLS reverse proxy (Caddy, Traefik, nginx) in front of it.
+# on a server, put a TLS reverse proxy (Caddy, Traefik, nginx) in front of it. The relay is not
+# published on a port of its own: agents reach it at https://HOST/mcp, the app's tab at /bridge,
+# both through the web app's nginx. Without the relay (`docker compose up -d web`, or the web
+# image alone) the app works as before and simply doesn't connect.
 name: solidcraft
 services:
-  solidcraft:
-    image: ghcr.io/tangency-labs/solidcraft-web:latest
+  web:
+    image: ghcr.io/${SOLIDCRAFT_IMAGE_OWNER:-tangency-labs}/solidcraft-web:${SOLIDCRAFT_TAG:-latest}
     build:
       context: ../..
       dockerfile: packaging/docker/Dockerfile
+      target: web
     ports:
       - "${SOLIDCRAFT_PORT:-8080}:8080"
     restart: unless-stopped
@@ -24,3 +30,34 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+  relay:
+    image: ghcr.io/${SOLIDCRAFT_IMAGE_OWNER:-tangency-labs}/solidcraft-relay:${SOLIDCRAFT_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile
+      target: relay
+    environment:
+      # Required: the relay does not start without it. Agents send it as `Authorization: Bearer
+      # …`, the tab gets it once as https://HOST/#mcp=…. Change it to shut both out.
+      SOLIDCRAFT_RELAY_TOKEN: ${SOLIDCRAFT_RELAY_TOKEN:-}
+      # Other sites whose pages may connect a tab (the app's own site always may).
+      SOLIDCRAFT_RELAY_ALLOWED_ORIGIN: ${SOLIDCRAFT_RELAY_ALLOWED_ORIGIN:-}
+      # The app's public address (https://cad.example/), for the hints agents get.
+      SOLIDCRAFT_RELAY_PUBLIC_URL: ${SOLIDCRAFT_RELAY_PUBLIC_URL:-}
+      # off: calls need a tab; fallback: the relay's own design while no tab is connected; only.
+      SOLIDCRAFT_RELAY_HEADLESS: ${SOLIDCRAFT_RELAY_HEADLESS:-off}
+    volumes:
+      # The headless session's files (unused while SOLIDCRAFT_RELAY_HEADLESS is off).
+      - relay-data:/data
+    # A signal reaches the relay through a small init process, so `docker compose down` is quick.
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  relay-data:

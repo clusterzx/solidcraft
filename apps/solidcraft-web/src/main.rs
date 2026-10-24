@@ -3,17 +3,22 @@
 //! Runs the same [`solidcraft_ui_egui::SolveApp`] as the desktop app through eframe's web runner
 //! (wgpu: WebGPU where available, WebGL2 otherwise). Build with `trunk build --release` from this
 //! directory (output in `dist/web`). URL flags: `?webgl` forces WebGL2 (remembered until
-//! `?webgpu`), `?sample` opens the sample part.
+//! `?webgpu`), `?sample` opens the sample part; `#mcp=TOKEN` connects the tab to an MCP relay
+//! (`bridge.rs`, docs/web-mcp.md).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
 mod api;
+#[cfg(target_arch = "wasm32")]
+mod bridge;
 #[cfg(any(target_arch = "wasm32", test))]
 mod disk;
 #[cfg(target_arch = "wasm32")]
 mod files;
 #[cfg(target_arch = "wasm32")]
 mod install;
+#[cfg(target_arch = "wasm32")]
+mod requests;
 #[cfg(any(target_arch = "wasm32", test))]
 mod space_mouse;
 
@@ -23,6 +28,22 @@ mod space_mouse;
 #[cfg(any(target_arch = "wasm32", test))]
 fn browser_switches_tabs(key: &str, ctrl: bool) -> bool {
     ctrl && key == "Tab"
+}
+
+/// `mcp=…` in the address's fragment (`#mcp=TOKEN`, among other `&`-separated parts): the agent
+/// bridge's token, and the fragment without it.
+#[cfg(any(target_arch = "wasm32", test))]
+fn mcp_token_from_fragment(fragment: &str) -> Option<(String, String)> {
+    let fragment = fragment.strip_prefix('#').unwrap_or(fragment);
+    let mut token = None;
+    let mut rest = Vec::new();
+    for part in fragment.split('&').filter(|p| !p.is_empty()) {
+        match part.strip_prefix("mcp=") {
+            Some(t) if token.is_none() => token = Some(t.to_string()),
+            _ => rest.push(part),
+        }
+    }
+    token.map(|t| (t, rest.join("&")))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -35,8 +56,10 @@ mod web {
     use wasm_bindgen::JsCast as _;
 
     use crate::api::Api;
+    use crate::bridge::Bridge;
     use crate::disk::{self, SaveTarget};
     use crate::files::{self, Files, Intent};
+    use crate::requests::Requests;
     use crate::space_mouse::SpaceMouse;
 
     const CANVAS_ID: &str = "solidcraft_canvas";
@@ -112,7 +135,9 @@ mod web {
 
     struct Shell {
         app: SolveApp,
-        api: Api,
+        /// Control requests from the browser API and the agent bridge.
+        requests: Requests,
+        bridge: Bridge,
         files: Rc<Files>,
         /// When the last autosave was (seconds), and the revision it holds (none stored: `None`).
         autosaved_at: f64,
@@ -504,7 +529,7 @@ mod web {
         fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             self.tick_font(ctx);
             self.app.logic(ctx);
-            self.api.poll();
+            self.requests.poll();
             self.space_mouse.logic(&mut self.app, ctx);
             self.files_tick(ctx);
             UNSAVED.with(|u| u.set(solidcraft_ui_egui::documents::any_dirty(&self.app)));
@@ -524,6 +549,7 @@ mod web {
             let ctx = ui.ctx().clone();
             self.file_panel(&ctx);
             self.recovery_prompt(&ctx);
+            self.bridge.show(&self.app, &ctx);
             self.watch_text_for_font(&ctx);
         }
         fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -662,11 +688,14 @@ mod web {
                             let rev = app.session.revision;
                             app.home.show(rev);
                         }
-                        let api = Api::install(sender, cc.egui_ctx.clone()).map_err(|e| format!("SolidCraft browser API: {e:?}"))?;
+                        let requests = Requests::new(sender, cc.egui_ctx.clone());
+                        Api::install(requests.clone()).map_err(|e| format!("SolidCraft browser API: {e:?}"))?;
+                        let bridge = Bridge::install(requests.clone(), cc.egui_ctx.clone());
                         let font_language = app.preferences.language.clone();
                         Ok(Box::new(Shell {
                             app,
-                            api,
+                            requests,
+                            bridge,
                             files,
                             autosaved_at: f64::NEG_INFINITY,
                             autosaved: None,
@@ -708,6 +737,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_agent_token_is_taken_from_the_fragment() {
+        assert_eq!(mcp_token_from_fragment("#mcp=abc123"), Some(("abc123".into(), String::new())));
+        assert_eq!(mcp_token_from_fragment("#view=top&mcp=a%2Bb&x=1"), Some(("a%2Bb".into(), "view=top&x=1".into())));
+        assert_eq!(mcp_token_from_fragment("#mcp="), Some((String::new(), String::new())));
+        assert_eq!(mcp_token_from_fragment("#mcpx=1"), None);
+        assert_eq!(mcp_token_from_fragment(""), None);
+    }
 
     #[test]
     fn only_ctrl_tab_is_left_to_the_browser() {

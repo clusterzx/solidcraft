@@ -28,8 +28,12 @@ impl Effect {
     }
 }
 
+/// How a reply starts when the app in a browser tab refused a request unrun because the tab is in
+/// the background, where the browser pauses it (docs/web-mcp.md): it may be sent again as it is.
+pub const NOT_RUN_HIDDEN: &str = "not run: the SolidCraft tab is in the background";
+
 /// Control methods that only read: a timed-out one changes nothing when it finishes.
-/// (`ui.screenshot` with a `path`, and `ui.render`, write a file: see [`effect`].)
+/// (`ui.screenshot` and `ui.render` with a `path` write a file: see [`effect`].)
 const READ_METHODS: &[&str] = &[
     "control.pending",
     "document.inspect",
@@ -80,9 +84,9 @@ pub fn effect(method: &str, params: &Value) -> Effect {
             Some(id) => command_effect(id, params.get("params").unwrap_or(&Value::Null)),
             None => Effect::Changes,
         },
-        "ui.render" => Effect::WritesFile,
-        "ui.screenshot" if params.get("path").is_some_and(|p| !p.is_null()) => Effect::WritesFile,
-        "ui.screenshot" => Effect::ReadsOnly,
+        "ui.render" | "ui.screenshot" if params.get("path").is_some_and(|p| !p.is_null()) => Effect::WritesFile,
+        // No path: the picture comes back in the reply (`inline`) or only its size does.
+        "ui.render" | "ui.screenshot" => Effect::ReadsOnly,
         m if READ_METHODS.contains(&m) => Effect::ReadsOnly,
         _ => Effect::Changes,
     }
@@ -115,6 +119,8 @@ mod tests {
         for (m, p) in [
             ("ui.inspect", json!({})),
             ("ui.screenshot", json!({})),
+            ("ui.screenshot", json!({"inline": true})),
+            ("ui.render", json!({"inline": true, "width": 64})),
             ("document.inspect", json!({"measure": true})),
             ("engine.execute", json!({"command": "sketch.inspect"})),
             ("engine.execute", json!({"command": "inspect.measure"})),

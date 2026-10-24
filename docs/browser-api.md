@@ -10,11 +10,12 @@ control channel. No separate engine or server is started.
 | `solidcraft.execute(command, params?)` | Run an engine command without opening its interactive dialog |
 | `solidcraft.commands()` | Discover commands, their parameters and current enablement |
 | `solidcraft.inspect(params?)` | Inspect the active document, optionally with `{measure: true}` |
+| `solidcraft.agent.connect(token?, url?)`, `.disconnect()`, `.status()` | The agent bridge to an MCP relay ([web-mcp.md](web-mcp.md)) |
 
 Every call returns a promise. It resolves to the control reply's `result`, or rejects with an
 `Error`. Omitted or `null` parameters become `{}`. Parameters must be JSON serializable and
-at most 16 MiB of JSON. At most 256 requests may be pending; excess requests reject without
-running. Requests run on the UI thread between frames. A hidden or suspended tab can delay
+at most 16 MiB of JSON. At most 256 requests may be pending (with those of the agent bridge);
+excess requests reject without running. Requests run on the UI thread between frames. A hidden or suspended tab can delay
 completion; keep it active while driving the app. A reload ends the session and its pending work.
 
 In the browser's developer console, on an empty design:
@@ -32,7 +33,9 @@ await solidcraft.request("ui.inspect");
 ```
 
 An agent with JavaScript evaluation access to this tab can make the same calls. The API does
-not register WebMCP tools or expose a network listener. Scripts executing in the page can use
+not register WebMCP tools or expose a network listener. An agent elsewhere reaches the tab
+through [solidcraft-relay](web-mcp.md): opened with `#mcp=TOKEN`, the app connects out to the
+relay on its own site and runs the relay's requests through the same control handlers. Scripts executing in the page can use
 the API with the page's browser permissions. File paths refer to the browser's virtual file
 system, not arbitrary files on the user's computer. Native-only operations remain subject to
 the browser host's limitations; this API does not grant desktop filesystem or window access.

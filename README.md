@@ -103,7 +103,8 @@ example session: [docs/mcp.md](docs/mcp.md).
 
 A script is a JSON list of the same commands the UI runs, executed with `solidcraft-cli run`.
 Format and example: [docs/scripts.md](docs/scripts.md). Pages can also be driven through the
-[browser command API](docs/browser-api.md).
+[browser command API](docs/browser-api.md), and by an MCP agent over HTTP through
+[solidcraft-relay](docs/web-mcp.md).
 
 ## Contributing
 

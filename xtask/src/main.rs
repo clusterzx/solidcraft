@@ -15,6 +15,7 @@ mod lists;
 mod test;
 mod test_nextest;
 mod ui_containers;
+mod web_mcp_test;
 mod web_offline;
 mod web_offline_test;
 
@@ -64,6 +65,10 @@ commands:
                   write the web build's service worker (sw.js: offline use, updates); run by
                   Trunk after release builds of apps/solidcraft-web, or on a built site in DIR
   web-api-test [--site DIR]  Test the command API in a real browser build (default: dist/web)
+  web-mcp-test [--site DIR] [--relay PATH] [--out DIR] [--url http://HOST:PORT/ --token TOKEN]
+                  an agent drives a real browser tab through solidcraft-relay (MCP over HTTP):
+                  model, inspect, screenshot (kept in --out), batch, save, open, tab takeover;
+                  --url drives a running stack (docker compose) instead of starting one
   web-offline-test [--site DIR]
                   check in headless Chrome that the web app works offline and updates to a new
                   build (a stand-in app, or the web build in DIR such as dist/web)
@@ -101,6 +106,18 @@ fn main() -> ExitCode {
         Some("web-offline-test") => {
             let site = rest.iter().position(|a| *a == "--site").and_then(|i| rest.get(i + 1)).copied();
             web_offline_test::run(&root(), site, true)
+        }
+        Some("web-mcp-test") => {
+            let value = |flag: &str| rest.iter().position(|a| *a == flag).and_then(|i| rest.get(i + 1)).copied();
+            let token = value("--token").map(str::to_string).or_else(|| std::env::var("SOLIDCRAFT_RELAY_TOKEN").ok());
+            let options = web_mcp_test::Options {
+                site: value("--site").unwrap_or("dist/web"),
+                relay: value("--relay"),
+                out: value("--out"),
+                url: value("--url"),
+                token,
+            };
+            web_mcp_test::run(&root(), options)
         }
         Some("web-api-test") => {
             let site = rest.iter().position(|a| *a == "--site").and_then(|i| rest.get(i + 1)).copied().unwrap_or("dist/web");

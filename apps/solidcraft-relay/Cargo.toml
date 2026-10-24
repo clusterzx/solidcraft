@@ -1,0 +1,26 @@
+[package]
+name = "solidcraft-relay"
+description = "SolidCraft's MCP server for the web app: Streamable HTTP for agents, a WebSocket bridge to the browser tab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "solidcraft-relay"
+path = "src/main.rs"
+
+[dependencies]
+solidcraft-engine = { workspace = true }
+solidcraft-mcp = { workspace = true }
+serde_json = { workspace = true }
+# Random MCP session ids from the operating system (MIT OR Apache-2.0; already in the tree).
+getrandom = "0.3"
+# HTTP/1.1 request heads (MIT OR Apache-2.0; already in the tree through tungstenite).
+httparse = "1.10"
+# The browser tab's WebSocket, blocking like the rest of the MCP server (MIT OR Apache-2.0).
+# `handshake` only for the accept key; the relay parses the upgrade request itself.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }

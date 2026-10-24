@@ -2405,6 +2405,14 @@
   "update.up_to_date": "SolidCraft は最新です。",
   "update.update_now": "今すぐ更新",
   "update.you_have": "現在のバージョンは {version} です。",
+  "web.agent.connected": "AI エージェント接続中",
+  "web.agent.connecting": "AI エージェントのリレーに接続しています…",
+  "web.agent.disconnect": "切断",
+  "web.agent.hint": "AI エージェントがリレー経由でこのタブのデザインを変更できます。作業中はこのタブを前面に表示したままにしてください。",
+  "web.agent.reconnect": "再接続",
+  "web.agent.refused": "AI エージェントのリレーがこのタブのトークンを拒否しました",
+  "web.agent.replaced": "別のタブが AI エージェントの接続を引き継ぎました",
+  "web.agent.retrying": "AI エージェントのリレーに接続できません。再試行します",
   "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ 選択 · Enter / Tab 補完 · Esc 閉じる",
   "↑ ↓ choose · Enter applies what you typed · Esc dismiss": "↑ ↓ 選択 · Enter 入力どおりに適用 · Esc 閉じる"
 }

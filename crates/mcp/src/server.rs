@@ -1,6 +1,6 @@
-//! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources methods.
-
-use std::io::{BufRead, Write};
+//! JSON-RPC 2.0 and the MCP lifecycle / tools / resources methods, independent of the transport:
+//! a message in, at most one message out. The stdio transport (`stdio.rs`, `solidcraft-cli mcp`)
+//! feeds it lines; `solidcraft-relay` feeds it HTTP request bodies (Streamable HTTP).
 
 use serde_json::{Value, json};
 /// Longest accepted request line, shared with the control server.
@@ -15,8 +15,8 @@ use crate::tools::{call_tool, check_arguments, tool_definitions};
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const SUPPORTED_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
 
-const PARSE_ERROR: i64 = -32700;
-const INVALID_REQUEST: i64 = -32600;
+pub(crate) const PARSE_ERROR: i64 = -32700;
+pub(crate) const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
@@ -39,18 +39,20 @@ pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
     scope: Option<PathScope>,
+    /// The protocol revision `initialize` agreed on.
+    version: Option<&'static str>,
 }
 
 fn response(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
-fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
+pub(crate) fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
 }
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false, scope: None }
+        Self { backend, initialized: false, scope: None, version: None }
     }
     /// Confine the files tool calls may reach to `scope` (`None`: anywhere). `solidcraft-cli mcp`
     /// always sets one unless started with `--allow-any-path` (docs/mcp.md).
@@ -64,56 +66,9 @@ impl Server {
     pub fn is_initialized(&self) -> bool {
         self.initialized
     }
-
-    /// Serve newline-delimited JSON-RPC until `input` closes. Only protocol messages go to
-    /// `output`; diagnostics belong on stderr. Consume oversized lines in bounded space so an
-    /// agent cannot exhaust memory by sending an arbitrarily long request without a newline.
-    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        loop {
-            let mut line = Vec::new();
-            let mut oversized = false;
-            let mut received = false;
-            loop {
-                let chunk = input.fill_buf()?;
-                if chunk.is_empty() {
-                    break;
-                }
-                let count = chunk.iter().position(|&byte| byte == b'\n').map_or(chunk.len(), |i| i + 1);
-                let newline = chunk[count - 1] == b'\n';
-                let content_len = count - usize::from(newline);
-                if !oversized {
-                    if line.len().saturating_add(content_len) > MAX_LINE {
-                        oversized = true;
-                        line.clear();
-                    } else {
-                        line.extend_from_slice(&chunk[..content_len]);
-                    }
-                }
-                input.consume(count);
-                received = true;
-                if newline {
-                    break;
-                }
-            }
-            if !received {
-                break;
-            }
-            let reply = if oversized {
-                Some(error(Value::Null, INVALID_REQUEST, "request too large").to_string())
-            } else {
-                match String::from_utf8(line) {
-                    Ok(line) => self.handle_line(&line),
-                    // Not UTF-8: answer with a parse error and keep serving.
-                    Err(_) => Some(error(Value::Null, PARSE_ERROR, "parse error: input is not UTF-8").to_string()),
-                }
-            };
-            if let Some(reply) = reply {
-                output.write_all(reply.as_bytes())?;
-                output.write_all(b"\n")?;
-                output.flush()?;
-            }
-        }
-        Ok(())
+    /// The protocol revision `initialize` agreed on (`None` before it).
+    pub fn protocol_version(&self) -> Option<&'static str> {
+        self.version
     }
 
     /// One line in, at most one line out (notifications get no reply).
@@ -127,16 +82,24 @@ impl Server {
             return None;
         }
         let reply = match serde_json::from_str::<Value>(line) {
-            Ok(Value::Array(batch)) if batch.is_empty() => Some(error(Value::Null, INVALID_REQUEST, "empty batch")),
-            Ok(Value::Array(batch)) if batch.len() > MAX_BATCH => Some(error(Value::Null, INVALID_REQUEST, "batch too large")),
-            Ok(Value::Array(batch)) => {
-                let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
-                (!replies.is_empty()).then_some(Value::Array(replies))
-            }
-            Ok(msg) => self.handle(msg),
+            Ok(msg) => self.handle_value(msg),
             Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: {e}"))),
         };
         reply.map(|r| r.to_string())
+    }
+
+    /// One parsed message (or batch of them) in, at most one out: `None` when nothing needs an
+    /// answer (notifications, responses).
+    pub fn handle_value(&mut self, msg: Value) -> Option<Value> {
+        match msg {
+            Value::Array(batch) if batch.is_empty() => Some(error(Value::Null, INVALID_REQUEST, "empty batch")),
+            Value::Array(batch) if batch.len() > MAX_BATCH => Some(error(Value::Null, INVALID_REQUEST, "batch too large")),
+            Value::Array(batch) => {
+                let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
+                (!replies.is_empty()).then_some(Value::Array(replies))
+            }
+            msg => self.handle(msg),
+        }
     }
 
     pub fn handle(&mut self, msg: Value) -> Option<Value> {
@@ -166,7 +129,8 @@ impl Server {
         match method {
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
-                let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
+                let version = SUPPORTED_VERSIONS.iter().copied().find(|v| *v == asked).unwrap_or(PROTOCOL_VERSION);
+                self.version = Some(version);
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false}},
@@ -186,7 +150,12 @@ impl Server {
                 // The open design's folder counts as it is now (a save-as or open moves it).
                 let scope = self.scope.clone().map(|s| s.with_design(self.backend.design_path().as_deref()));
                 let backend = self.backend.as_mut();
-                Ok(vfs::scoped(scope, || call_tool(backend, name, &args)))
+                let mut result = vfs::scoped(scope, || call_tool(backend, name, &args));
+                // What the backend has to say about this call, after its own content.
+                if let (Some(notice), Some(content)) = (self.backend.take_notice(), result.get_mut("content").and_then(Value::as_array_mut)) {
+                    content.push(json!({"type": "text", "text": notice}));
+                }
+                Ok(result)
             }
             "resources/list" => Ok(json!({"resources": [
                 {"uri": "solidcraft://design", "name": "Active design", "description": "document.inspect with measurements", "mimeType": "application/json"},

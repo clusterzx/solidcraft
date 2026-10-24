@@ -29,6 +29,16 @@ pub trait Backend {
     fn in_process(&self) -> bool {
         false
     }
+    /// Pictures come back in the reply (`inline: true` asks for `png_base64`) instead of in a file
+    /// both sides read: the app runs in a browser tab, which can't write the server's files.
+    fn inline_images(&self) -> bool {
+        false
+    }
+    /// A note for the agent about the call just made (added to its tool result), such as "this
+    /// call ran somewhere else than the one before". Taken once.
+    fn take_notice(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// Longest reply line accepted from the app.
@@ -522,21 +532,34 @@ impl Backend for Headless {
                 // The grid and the axes are drawn unless the request leaves them out.
                 let shown = |k: &str| p.get(k).and_then(Value::as_bool).unwrap_or(true);
                 let guides = Guides { grid: shown("grid"), axes: shown("axes") };
-                let path = str_p("path").ok_or("missing `path`")?;
+                // `inline`: the picture comes back in the reply (`png_base64`); a path is optional.
+                let inline = p.get("inline").and_then(Value::as_bool).unwrap_or(false);
+                let path = str_p("path");
+                if path.is_none() && !inline {
+                    return Err("missing `path`".into());
+                }
                 // A path outside the agent's folders is refused before anything is drawn.
-                solidcraft_engine::io::vfs::check(path).map_err(|e| format!("{path}: {e}"))?;
+                if let Some(path) = path {
+                    solidcraft_engine::io::vfs::check(path).map_err(|e| format!("{path}: {e}"))?;
+                }
                 let scene = solidcraft_engine::view::scene_with_guides(s, &cam, s.section, guides);
                 // Drawn on the GPU by the renderer the host installed (`solidcraft-cli mcp`).
                 let png = solidcraft_engine::capture::png(&scene, &cam, w, h)?;
-                solidcraft_engine::io::vfs::write(path, &png.bytes).map_err(|e| format!("{path}: {e}"))?;
-                Ok(json!({
+                if let Some(path) = path {
+                    solidcraft_engine::io::vfs::write(path, &png.bytes).map_err(|e| format!("{path}: {e}"))?;
+                }
+                let mut reply = json!({
                     "path": path,
                     "bytes": png.bytes.len(),
                     "width": w,
                     "height": h,
                     "renderer": png.renderer,
                     "warning": solidcraft_engine::capture::warning(png.renderer),
-                }))
+                });
+                if inline {
+                    reply["png_base64"] = json!(crate::tools::base64(&png.bytes));
+                }
+                Ok(reply)
             }
             "ui.screenshot" => Err("no window in headless mode; use ui.render".into()),
             // Calls run here one at a time: none is running while this one is asked, and nothing

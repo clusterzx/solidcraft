@@ -37,5 +37,9 @@ header "$BASE/$WASM" Cache-Control | grep -q immutable || fail "$WASM should be 
 [ "$(header "$BASE/manifest.webmanifest" Content-Type)" = application/manifest+json ] || fail "wrong manifest type"
 code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/no-such-file")"
 [ "$code" = 404 ] || fail "a missing file answers $code, not 404"
+# Alone, without solidcraft-relay: the agent's endpoints fail cleanly and the site still works.
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$BASE/mcp")"
+[ "$code" = 502 ] || fail "/mcp without a relay answers $code, not 502"
+curl -fs "$BASE/" | grep -q 'solidcraft_canvas' || fail "the site stopped working after a request for the relay"
 
 echo "smoke test passed: $IMAGE serves $WASM"
