@@ -41,6 +41,10 @@ const USAGE: &str = "solidcraft-relay: SolidCraft's MCP server for the web app (
 Agents connect to POST /mcp (Streamable HTTP, Authorization: Bearer TOKEN); the web app in a
 browser tab connects to /bridge once opened as https://HOST/#mcp=TOKEN.
 
+Options:
+  --health    ask the relay listening at SOLIDCRAFT_RELAY_LISTEN whether it runs (for health checks)
+  --version   print the version
+
 Environment:
   SOLIDCRAFT_RELAY_TOKEN           the token (required; or SOLIDCRAFT_RELAY_TOKEN_FILE)
   SOLIDCRAFT_RELAY_LISTEN          address to listen on (default 127.0.0.1:8090)
@@ -153,6 +157,39 @@ fn connection(relay: &Relay, stream: TcpStream) {
     }
 }
 
+/// `--health`: whether the relay at `SOLIDCRAFT_RELAY_LISTEN` answers `/healthz` (a container's
+/// health check: the relay's image has no shell or HTTP client).
+fn health() -> std::process::ExitCode {
+    use std::io::{Read as _, Write as _};
+    let listen = std::env::var("SOLIDCRAFT_RELAY_LISTEN").ok().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| config::DEFAULT_LISTEN.into());
+    let Ok(mut addr) = listen.trim().parse::<std::net::SocketAddr>() else {
+        eprintln!("solidcraft-relay: SOLIDCRAFT_RELAY_LISTEN `{listen}` is not an address");
+        return std::process::ExitCode::FAILURE;
+    };
+    // Listening everywhere: ask on this computer.
+    if addr.ip().is_unspecified() {
+        addr.set_ip(if addr.is_ipv4() { std::net::Ipv4Addr::LOCALHOST.into() } else { std::net::Ipv6Addr::LOCALHOST.into() });
+    }
+    let answer = TcpStream::connect_timeout(&addr, Duration::from_secs(3)).and_then(|mut s| {
+        s.set_read_timeout(Some(Duration::from_secs(3)))?;
+        s.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+        let mut reply = Vec::new();
+        s.take(4096).read_to_end(&mut reply)?;
+        Ok(reply)
+    });
+    match answer {
+        Ok(reply) if reply.starts_with(b"HTTP/1.1 200") => std::process::ExitCode::SUCCESS,
+        Ok(_) => {
+            eprintln!("solidcraft-relay: {addr} answered, but not as a healthy relay");
+            std::process::ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("solidcraft-relay: nothing answers at {addr}: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -162,6 +199,9 @@ fn main() -> std::process::ExitCode {
     if args.iter().any(|a| a == "-V" || a == "--version") {
         println!("solidcraft-relay {}", env!("CARGO_PKG_VERSION"));
         return std::process::ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "--health") {
+        return health();
     }
     if let Some(a) = args.first() {
         eprintln!("solidcraft-relay: unknown argument `{a}`; settings come from the environment (--help)");

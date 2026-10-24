@@ -11,3 +11,6 @@ __pycache__/
 
 # cargo-mutants output (docs/mutation-testing.md)
 mutants.out*/
+
+# Local settings with secrets (packaging/docker/.env.example).
+packaging/docker/.env

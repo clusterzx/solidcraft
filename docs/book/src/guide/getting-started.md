@@ -132,15 +132,44 @@ Or with Docker Compose, using
 (`SOLIDCRAFT_PORT` picks another port):
 
 ```sh
-docker compose -f packaging/docker/compose.yaml up -d      # start
-docker compose -f packaging/docker/compose.yaml pull && docker compose -f packaging/docker/compose.yaml up -d   # update
-docker compose -f packaging/docker/compose.yaml up -d --build   # build the image from your checkout instead
+docker compose -f packaging/docker/compose.yaml up -d web      # start the web app
+docker compose -f packaging/docker/compose.yaml pull web && docker compose -f packaging/docker/compose.yaml up -d web   # update
+docker compose -f packaging/docker/compose.yaml up -d --build web   # build the image from your checkout instead
 ```
+
+(Without `web`, Compose also starts the MCP relay below, which needs a token.)
 
 Then open `http://localhost:8080/`. On another machine the browser only saves designs over HTTPS,
 so put a reverse proxy with a certificate in front (Caddy, Traefik, nginx); the app works under
 any URL path, such as `https://example.com/cad/`. To build the image without Compose, from the
 repository root: `docker build -f packaging/docker/Dockerfile -t solidcraft-web .`
+
+#### An AI agent in the browser tab (MCP)
+
+The compose file also runs **solidcraft-relay**, an MCP server through which an AI agent such as
+Claude Code drives the design open in a browser tab, with the same tools as the desktop app's
+MCP server ([docs/web-mcp.md](https://github.com/tangency-labs/solidcraft/blob/main/docs/web-mcp.md)).
+It needs a token; without one only the web app runs:
+
+```sh
+cd packaging/docker
+cp .env.example .env              # then set SOLIDCRAFT_RELAY_TOKEN in it: openssl rand -hex 32
+docker compose up -d              # the web app and the relay
+```
+
+Open the app once as `https://cad.example.de/#mcp=<TOKEN>`: the tab keeps the token, connects
+to the relay (the chip at the foot of the viewport says **AI agent connected**) and reconnects
+whenever the app starts. Then add the server to the agent:
+
+```sh
+claude mcp add --transport http solidcraft https://cad.example.de/mcp --header "Authorization: Bearer <TOKEN>"
+```
+
+Keep the tab in front while the agent works (a browser pauses tabs in the background), and treat
+the token like a password: it gives full control of the designs in that browser. The reverse
+proxy must pass WebSockets on (`/bridge`) and allow long requests (`/mcp`); see
+[docs/web-mcp.md](https://github.com/tangency-labs/solidcraft/blob/main/docs/web-mcp.md) for
+the setup, the settings and the security notes.
 
 ### 3D mouse in the browser
 

@@ -5,3 +5,5 @@
 dist
 plan
 docs/screenshots
+# Local settings with secrets (packaging/docker/.env.example).
+**/.env

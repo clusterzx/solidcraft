@@ -23,6 +23,7 @@ In the browser: `cd apps/solidcraft-web && trunk build --release --public-url ./
 WebGL2 with `?webgl`; `?sample` opens the sample part).
 
 Agents can control the document open in a browser tab through `window.solidcraft.execute(...)`
-and `window.solidcraft.request(...)`; see the [browser command API](browser-api.md).
+and `window.solidcraft.request(...)`; see the [browser command API](browser-api.md). An MCP
+client reaches the tab over HTTP through `solidcraft-relay` ([web-mcp.md](web-mcp.md)).
 
 See [CONTRIBUTING](../CONTRIBUTING.md) for the test and review workflow.

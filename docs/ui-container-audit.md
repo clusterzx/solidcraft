@@ -46,7 +46,7 @@ windows use the shared composition, including its header and fixed outer frame.
 | File/workspace/document/Help/context/overflow menus, radial menu, Select Other and inline rename | respective owners → `Menu` / container popup | Anchored transient hosts; never consume workspace dock space |
 | Search, completions, colour and library popovers | `shortcut_box`, kit fields/choice/colour/table | Anchored popup containers; editor focus and completion semantics retained |
 | Dimension values, canvas placement values, canvas feedback and History resize seam | `dim_view`, `sketch_dims`, `canvas`, `timeline_left` | Model/control-anchored overlays; retain their coordinates rather than becoming docks |
-| Status and loading/progress messages | `viewport`, `open_meshing` | Notification surfaces independent of layout |
+| Status and loading/progress messages, the web app's agent bridge chip | `viewport`, `open_meshing`, `apps/solidcraft-web` (`bridge`) | Notification surfaces independent of layout |
 | Navigation bar | `viewport` | Shared navigation surface; shell still computes its available canvas bounds |
 | Home, model viewport, Render canvas and native Assistant window content | `home`, `lib`, `agent_chat/panel` | Central content hosts, not floating workspace panels |
 | Loading input shield | `file_load` | Explicit input shield; must remain interactive while CAD input is blocked |

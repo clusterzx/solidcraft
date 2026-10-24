@@ -409,3 +409,47 @@ fn the_headless_fallback_answers_while_no_tab_is_connected() {
     assert!(!error && text.contains("tab"), "{text}");
     t.join().unwrap();
 }
+
+/// Agents keep their connection open between requests (HTTP/1.1 keep-alive).
+#[test]
+fn one_connection_carries_many_requests() {
+    let (addr, _) = start(config(HeadlessMode::Off));
+    let s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut out = s.try_clone().unwrap();
+    let mut r = BufReader::new(s);
+    let mut send = |body: &str, session: Option<&str>| -> (u16, Vec<(String, String)>, Vec<u8>) {
+        let session = session.map(|s| format!("Mcp-Session-Id: {s}\r\n")).unwrap_or_default();
+        let head = format!(
+            "POST /mcp HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\n{session}Content-Length: {}\r\n\r\n",
+            body.len()
+        );
+        out.write_all(head.as_bytes()).unwrap();
+        out.write_all(body.as_bytes()).unwrap();
+        let mut line = String::new();
+        r.read_line(&mut line).unwrap();
+        let status = line.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap();
+        let mut headers = Vec::new();
+        loop {
+            line.clear();
+            r.read_line(&mut line).unwrap();
+            match line.trim_end().split_once(':') {
+                Some((k, v)) => headers.push((k.to_ascii_lowercase(), v.trim().to_string())),
+                None => break,
+            }
+        }
+        let len = headers.iter().find(|(k, _)| k == "content-length").and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
+        let mut body = vec![0; len];
+        r.read_exact(&mut body).unwrap();
+        (status, headers, body)
+    };
+    let (status, headers, _) = send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#, None);
+    assert_eq!(status, 200);
+    assert!(headers.iter().any(|(k, v)| k == "connection" && v == "keep-alive"));
+    let session = headers.iter().find(|(k, _)| k == "mcp-session-id").map(|(_, v)| v.clone()).unwrap();
+    assert_eq!(send(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, Some(&session)).0, 202);
+    for id in 2..5 {
+        let (status, _, body) = send(&format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"ping"}}"#), Some(&session));
+        assert_eq!((status, serde_json::from_slice::<Value>(&body).unwrap()["id"].clone()), (200, json!(id)));
+    }
+}

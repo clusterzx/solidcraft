@@ -95,6 +95,14 @@ pub struct Bridge {
     inner: Rc<RefCell<Inner>>,
 }
 
+/// Stop `socket`'s events reaching the bridge (its handlers are about to be dropped) and close it.
+fn retire(socket: &web_sys::WebSocket, reason: &str) {
+    socket.set_onopen(None);
+    socket.set_onmessage(None);
+    socket.set_onclose(None);
+    let _ = socket.close_with_code_and_reason(1000, reason);
+}
+
 fn now() -> f64 {
     web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
 }
@@ -212,7 +220,7 @@ impl Bridge {
         let mut inner = self.inner.borrow_mut();
         inner.generation += 1;
         if let Some(s) = inner.socket.take() {
-            let _ = s.close_with_code_and_reason(1000, "disconnected in the app");
+            retire(&s, "disconnected in the app");
         }
         inner.handlers = None;
         inner.token = None;
@@ -239,7 +247,7 @@ impl Bridge {
         inner.generation += 1;
         let generation = inner.generation;
         if let Some(s) = inner.socket.take() {
-            let _ = s.close_with_code_and_reason(1000, "reconnecting");
+            retire(&s, "reconnecting");
         }
         inner.handlers = None;
         let Some(token) = inner.token.clone() else {

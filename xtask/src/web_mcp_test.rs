@@ -1,5 +1,7 @@
 //! `cargo xtask web-mcp-test [--site DIR] [--relay PATH] [--out DIR]`: an agent drives the web app
-//! in a real browser tab through `solidcraft-relay` (docs/web-mcp.md).
+//! in a real browser tab through `solidcraft-relay` (docs/web-mcp.md). With `--url
+//! http://HOST:PORT/ --token TOKEN` it drives a stack that already runs there instead (such as
+//! `docker compose up` with packaging/docker; plain HTTP only).
 //!
 //! Starts the relay, a small server for the web build that passes `/bridge` on to the relay (as
 //! nginx does in packaging/docker), and headless Chrome on the app with `#mcp=TOKEN`. Then, as
@@ -65,7 +67,7 @@ fn start_relay(exe: &Path, token: &str, data: &Path) -> Result<Relay, String> {
     let relay = Relay { child, port };
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(30) {
-        if http(port, "GET", "/healthz", &[], b"").is_ok_and(|r| r.0 == 200) {
+        if http(&Endpoint::local(port), "GET", "/healthz", &[], b"").is_ok_and(|r| r.0 == 200) {
             return Ok(relay);
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -140,13 +142,41 @@ fn answer(stream: TcpStream, site: &Path, relay: u16) -> std::io::Result<()> {
     out.write_all(&body)
 }
 
+/// Where the relay answers: a host, a port and the path its `mcp` is under.
+#[derive(Clone)]
+struct Endpoint {
+    host: String,
+    port: u16,
+    /// Ends with `/`.
+    base: String,
+}
+
+impl Endpoint {
+    fn local(port: u16) -> Self {
+        Endpoint { host: "127.0.0.1".into(), port, base: "/".into() }
+    }
+
+    /// `http://HOST[:PORT]/PATH/`.
+    fn parse(url: &str) -> Result<Self, String> {
+        let rest = url.strip_prefix("http://").ok_or_else(|| format!("--url {url}: give an http:// address (this test speaks no TLS)"))?;
+        let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p.parse().map_err(|_| format!("--url {url}: bad port"))?),
+            None => (authority.to_string(), 80),
+        };
+        let base = format!("/{}", path.trim_end_matches('/')).trim_end_matches('/').to_string() + "/";
+        Ok(Endpoint { host, port, base })
+    }
+}
+
 /// One HTTP/1.1 request on a new connection: status, headers (lower-case names) and body.
 type Reply = (u16, Vec<(String, String)>, Vec<u8>);
 
-fn http(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<Reply, String> {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).map_err(|e| format!("relay: {e}"))?;
+fn http(ep: &Endpoint, method: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<Reply, String> {
+    let mut s = TcpStream::connect((ep.host.as_str(), ep.port)).map_err(|e| format!("relay: {e}"))?;
     s.set_read_timeout(Some(Duration::from_secs(600))).map_err(|e| e.to_string())?;
-    let mut head = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n", body.len());
+    let path = format!("{}{}", ep.base, path.trim_start_matches('/'));
+    let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {}:{}\r\nContent-Length: {}\r\nConnection: close\r\n", ep.host, ep.port, body.len());
     for (k, v) in headers {
         head.push_str(&format!("{k}: {v}\r\n"));
     }
@@ -176,23 +206,23 @@ fn http(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &[u
 
 /// An MCP client session with the relay.
 struct Agent {
-    port: u16,
+    ep: Endpoint,
     auth: String,
     session: String,
     next: u64,
 }
 
 impl Agent {
-    fn connect(port: u16, token: &str) -> Result<Agent, String> {
+    fn connect(ep: &Endpoint, token: &str) -> Result<Agent, String> {
         let auth = format!("Bearer {token}");
         let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "web-mcp-test", "version": "1"}}});
         let headers = [("Authorization", auth.as_str()), ("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream")];
-        let (status, h, body) = http(port, "POST", "/mcp", &headers, init.to_string().as_bytes())?;
+        let (status, h, body) = http(ep, "POST", "/mcp", &headers, init.to_string().as_bytes())?;
         if status != 200 {
             return Err(format!("initialize: HTTP {status}: {}", String::from_utf8_lossy(&body)));
         }
         let session = h.iter().find(|(k, _)| k == "mcp-session-id").map(|(_, v)| v.clone()).ok_or("initialize: no Mcp-Session-Id")?;
-        let agent = Agent { port, auth, session, next: 1 };
+        let agent = Agent { ep: ep.clone(), auth, session, next: 1 };
         let (status, _, _) = agent.post(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
         if status != 202 {
             return Err(format!("notifications/initialized: HTTP {status}, not 202"));
@@ -208,7 +238,7 @@ impl Agent {
             ("Mcp-Session-Id", self.session.as_str()),
             ("MCP-Protocol-Version", "2025-06-18"),
         ];
-        http(self.port, "POST", "/mcp", &headers, msg.to_string().as_bytes())
+        http(&self.ep, "POST", "/mcp", &headers, msg.to_string().as_bytes())
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
@@ -282,49 +312,72 @@ fn wait_state(cdp: &mut Cdp, state: &str) -> Result<(), String> {
     wait_for(cdp, STATUS, &format!("the bridge is {state}"), |s| s["state"] == state)
 }
 
-pub fn run(root: &Path, site: &str, relay: Option<&str>, out: Option<&str>) -> Result<(), String> {
-    let site = std::fs::canonicalize(site).map_err(|e| format!("{site}: {e}; build apps/solidcraft-web with trunk first"))?;
-    if !site.join("index.html").is_file() {
-        return Err(format!("{}: index.html missing; build apps/solidcraft-web with trunk first", site.display()));
-    }
+/// What `cargo xtask web-mcp-test` was given.
+pub struct Options<'a> {
+    pub site: &'a str,
+    pub relay: Option<&'a str>,
+    pub out: Option<&'a str>,
+    /// A stack that runs already (the app at this address, the relay at its `mcp`), and its token.
+    pub url: Option<&'a str>,
+    pub token: Option<String>,
+}
+
+pub fn run(root: &Path, o: Options) -> Result<(), String> {
     let chrome = find_chrome().ok_or("web-mcp-test: Chrome not found (set CHROME to its executable)")?;
-    let exe = match relay {
-        Some(p) => PathBuf::from(p),
-        None => build_relay(root)?,
-    };
     let work = TempDir::named("solidcraft-web-mcp-test")?;
-    let out = match out {
+    let out = match o.out {
         Some(o) => PathBuf::from(o),
         None => work.0.join("out"),
     };
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let token = token();
-    let relay = start_relay(&exe, &token, &work.0.join("data"))?;
-    let port = start_site(site, relay.port)?;
+    // The relay and the site: started here, or the stack at `--url`.
+    let (ep, app, token, _relay) = match o.url {
+        Some(url) => {
+            let token = o.token.clone().ok_or("--url needs the relay's token: --token TOKEN or SOLIDCRAFT_RELAY_TOKEN")?;
+            let app = if url.ends_with('/') { url.to_string() } else { format!("{url}/") };
+            (Endpoint::parse(&app)?, app, token, None)
+        }
+        None => {
+            let site = std::fs::canonicalize(o.site).map_err(|e| format!("{}: {e}; build apps/solidcraft-web with trunk first", o.site))?;
+            if !site.join("index.html").is_file() {
+                return Err(format!("{}: index.html missing; build apps/solidcraft-web with trunk first", site.display()));
+            }
+            let exe = match o.relay {
+                Some(p) => PathBuf::from(p),
+                None => build_relay(root)?,
+            };
+            let token = token();
+            let relay = start_relay(&exe, &token, &work.0.join("data"))?;
+            let port = start_site(site, relay.port)?;
+            (Endpoint::local(relay.port), format!("http://127.0.0.1:{port}/"), token, Some(relay))
+        }
+    };
 
     // Agents need the token.
     let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).to_string();
-    let (status, _, _) = http(relay.port, "POST", "/mcp", &[], init.as_bytes())?;
+    let (status, _, _) = http(&ep, "POST", "/mcp", &[], init.as_bytes())?;
     check(status == 401, "no token: 401")?;
-    let (status, _, _) = http(relay.port, "POST", "/mcp", &[("Authorization", "Bearer not-the-token-0123456789")], init.as_bytes())?;
+    let (status, _, _) = http(&ep, "POST", "/mcp", &[("Authorization", "Bearer not-the-token-0123456789")], init.as_bytes())?;
     check(status == 401, "a wrong token: 401")?;
-    let mut agent = Agent::connect(relay.port, &token)?;
+    let mut agent = Agent::connect(&ep, &token)?;
     let tools = agent.call("tools/list", json!({}))?;
     let names: Vec<String> = tools["tools"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str().map(str::to_string)).collect();
     for t in ["describe_command", "execute", "batch", "inspect_design", "screenshot", "pending", "open", "save", "skill_reference"] {
         check(names.iter().any(|n| n == t), &format!("tools/list has {t}"))?;
     }
     println!("web-mcp-test: {} tools", names.len());
-    // No tab yet.
-    let e = agent.tool("execute", json!({"command": "solid.box"})).err().unwrap_or_default();
-    check(e.starts_with("no SolidCraft tab is connected"), &format!("without a tab the call says so ({e})"))?;
+    // No tab yet (a stack of the test's own).
+    if o.url.is_none() {
+        let e = agent.tool("execute", json!({"command": "solid.box"})).err().unwrap_or_default();
+        check(e.starts_with("no SolidCraft tab is connected"), &format!("without a tab the call says so ({e})"))?;
+    }
 
     // The tab connects by itself, and the token leaves the address.
     let browser = Chrome::launch(&chrome, &work.0.join("profile"))?;
     let mut cdp = browser.connect()?;
     cdp.call("Emulation.setDeviceMetricsOverride", json!({"width": 1280, "height": 860, "deviceScaleFactor": 1, "mobile": false}))?;
     cdp.call("Emulation.setFocusEmulationEnabled", json!({"enabled": true}))?;
-    cdp.call("Page.navigate", json!({"url": format!("http://127.0.0.1:{port}/?webgl#mcp={token}")}))?;
+    cdp.call("Page.navigate", json!({"url": format!("{app}?webgl#mcp={token}")}))?;
     wait_for(&mut cdp, "!!window.solidcraft && !document.getElementById('solidcraft_loading')", "the app started", |v| v == true)?;
     wait_state(&mut cdp, "connected")?;
     let address = cdp.eval("[location.hash, localStorage.getItem('solidcraft.mcp.token') !== null]")?;
@@ -376,7 +429,7 @@ pub fn run(root: &Path, site: &str, relay: Option<&str>, out: Option<&str>) -> R
     wait_state(&mut cdp, "connected")?;
     // A second tab takes over; the first is told, and doesn't come back by itself.
     let mut second = browser.new_tab()?;
-    second.call("Page.navigate", json!({"url": format!("http://127.0.0.1:{port}/?webgl")}))?;
+    second.call("Page.navigate", json!({"url": format!("{app}?webgl")}))?;
     wait_for(&mut second, "!!window.solidcraft && !document.getElementById('solidcraft_loading')", "the second tab started", |v| v == true)?;
     wait_state(&mut second, "connected")?;
     wait_state(&mut cdp, "replaced")?;
@@ -405,6 +458,15 @@ fn wait_until(mut f: impl FnMut() -> Result<bool, String>) -> Result<bool, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoints_from_addresses() {
+        let e = Endpoint::parse("http://cad.lan:8080/").unwrap();
+        assert_eq!((e.host.as_str(), e.port, e.base.as_str()), ("cad.lan", 8080, "/"));
+        let e = Endpoint::parse("http://10.0.0.5/app/").unwrap();
+        assert_eq!((e.host.as_str(), e.port, e.base.as_str()), ("10.0.0.5", 80, "/app/"));
+        assert!(Endpoint::parse("https://cad.example/").is_err());
+    }
 
     #[test]
     fn unbase64_reads_what_base64_writes() {
