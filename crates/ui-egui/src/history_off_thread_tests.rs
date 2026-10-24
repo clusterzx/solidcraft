@@ -526,7 +526,7 @@ fn a_body_renamed_in_the_browser_keeps_the_pattern_after_it() {
     ] {
         h.app.run(id, p).unwrap();
     }
-    h.app.ui.locked_bodies.push("Body1".into());
+    h.app.session.visibility.locked_bodies.push("Body1".into());
     h.app.apply_off_thread = Some(Duration::ZERO);
     crate::context_menu::start_rename(&mut h.app, crate::context_menu::RenameWhat::Body("Body1".into()), egui::pos2(0.0, 0.0));
     h.frames(2);
@@ -543,5 +543,5 @@ fn a_body_renamed_in_the_browser_keeps_the_pattern_after_it() {
     assert_eq!(names(&h), ["Plate"]);
     let kept = before.zip(mesh(&h)).is_some_and(|(a, b)| std::sync::Arc::ptr_eq(&a, &b));
     assert!(kept, "no feature computed again");
-    assert_eq!(h.app.ui.locked_bodies, ["Plate"]);
+    assert_eq!(h.app.session.visibility.locked_bodies, ["Plate"]);
 }

@@ -17,6 +17,28 @@ pub(crate) fn same_item(a: &Sel, b: &Sel) -> bool {
     }
 }
 
+/// Two distinct point intents for the alignment command, without creating sketch points.
+pub(crate) fn alignment_points(selection: &[Sel]) -> Option<[serde_json::Value; 2]> {
+    let [a, b] = selection else { return None };
+    let point = |s: &Sel| match s {
+        Sel::SketchPoint { id } => Some(serde_json::json!(id)),
+        Sel::SketchMidpoint { id } => Some(serde_json::json!({"midpoint": id})),
+        _ => None,
+    };
+    let (a, b) = (point(a)?, point(b)?);
+    (a != b).then_some([a, b])
+}
+
+/// The current middle of a finite straight sketch edge.
+pub(crate) fn line_midpoint(sk: &solidcraft_engine::sketch::Sketch, line: usize) -> Option<solidcraft_engine::geom::Vec2> {
+    let curve = sk.curves.get(line)?;
+    if curve.infinite {
+        return None;
+    }
+    let solidcraft_engine::sketch::CurveKind::Line { a, b } = &curve.kind else { return None };
+    Some((sk.point(*a)? + sk.point(*b)?) * 0.5)
+}
+
 /// What a selection input accepts (bit set).
 pub type Accept = u16;
 pub const PROFILES: Accept = 1;

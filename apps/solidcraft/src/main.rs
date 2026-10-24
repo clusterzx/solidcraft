@@ -8,6 +8,7 @@
 //! A `.step`/`.stp` file opens as a new design holding the file's bodies (an Import feature); a
 //! `.3mf`/`.stl`/`.obj`/`.glb`/`.gltf` file as a new design holding mesh bodies.
 //!
+//! `SOLIDCRAFT_SETTINGS_DIR` selects an explicit absolute settings directory without legacy adoption.
 //! `--control <port>` (or `SOLIDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control
 //! server: `{"id":1,"method":"engine.execute","params":{"command":"solid.box","params":{…}}}`.
 //! Without them the channel still opens, on the default port, unless Preferences turns it off.
@@ -459,14 +460,15 @@ fn http_call(url: &str, timeout: std::time::Duration) -> Result<ureq::http::Resp
 }
 
 /// The per-user settings folder: eframe's storage (`app.ron`) and the anti-aliasing preference.
-fn settings_dir() -> Option<std::path::PathBuf> {
-    eframe::storage_dir("SolidCraft")
+fn settings_dir() -> Result<Option<std::path::PathBuf>, String> {
+    let selected = std::env::var_os("SOLIDCRAFT_SETTINGS_DIR");
+    startup::settings_directory(selected.as_deref(), eframe::storage_dir("SolidCraft"))
 }
 
 /// The anti-aliasing preference, kept next to eframe's storage (it is needed before the
 /// window opens).
 fn graphics_path() -> Option<std::path::PathBuf> {
-    settings_dir().map(|d| d.join("graphics.json"))
+    settings_dir().ok().flatten().map(|d| d.join("graphics.json"))
 }
 
 /// Compatibility shim (docs/compatibility.md): on the first launch after the rename, copy the
@@ -476,7 +478,7 @@ fn graphics_path() -> Option<std::path::PathBuf> {
 /// old app id's `~/.var/app` folder; that copy comes first, as it is the newest. The old folders
 /// are never changed.
 fn adopt_legacy_settings() {
-    let (Some(current), Some(legacy)) = (settings_dir(), eframe::storage_dir("SolveCraft")) else { return };
+    let (Some(current), Some(legacy)) = (settings_dir().ok().flatten(), eframe::storage_dir("SolveCraft")) else { return };
     let legacy_eframe = eframe::storage_dir(solidcraft_engine::io::LEGACY_APP_ID);
     let old_flatpak = solidcraft_engine::io::legacy_flatpak_path(&current);
     if let Err(e) = adopt_settings(&current, old_flatpak.as_deref(), &legacy, legacy_eframe.as_deref()) {
@@ -576,7 +578,11 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     objc2_foundation::NSProcessInfo::processInfo().setProcessName(objc2_foundation::ns_string!("SolidCraft"));
     mark("main");
-    adopt_legacy_settings();
+    // Validate before legacy adoption, crash markers or any user preference read.
+    let settings = settings_dir().map_err(|error| eframe::Error::AppCreation(error.into()))?;
+    if std::env::var_os("SOLIDCRAFT_SETTINGS_DIR").is_none() {
+        adopt_legacy_settings();
+    }
     let mut safe_mode = startup::env_on(std::env::var(startup::SAFE_MODE_ENV).ok().as_deref());
     let mut control_port: Option<u16> = solidcraft_engine::geom::env::var("CONTROL_PORT").and_then(|p| p.parse().ok());
     let mut files = Vec::new();
@@ -613,7 +619,6 @@ fn main() -> eframe::Result {
     }
     // Settings that don't read are moved aside; launches that never got a window are counted,
     // and after a few in a row this one starts in safe mode (docs/book/src/guide/troubleshooting.md).
-    let settings = settings_dir();
     let mut notes: Vec<String> = Vec::new();
     let mut failed_starts = 0;
     if let Some(dir) = &settings {
