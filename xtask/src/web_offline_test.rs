@@ -69,7 +69,7 @@ const ELSEWHERE: &str = "/solidcraft/elsewhere/";
 /// How long one launch may take (a real build compiles ~30 MB of wasm). Generous: the CI
 /// runners that take fork pull requests run several jobs per machine under gVisor, where one
 /// launch has taken over 90 s.
-const LAUNCH_TIMEOUT: Duration = Duration::from_secs(240);
+pub(crate) const LAUNCH_TIMEOUT: Duration = Duration::from_secs(240);
 /// sw.js's NAVIGATE_TIMEOUT_MS, less a margin: a hung network is waited for at least this long.
 const SLOW_NETWORK_WAIT: Duration = Duration::from_secs(3);
 /// Where Mode::SignIn redirects to (on `localhost`: another origin than the 127.0.0.1 app).
@@ -488,7 +488,7 @@ fn check_site(root: &Path, site: &Path, scratch: &Path) -> Result<(), String> {
 }
 
 /// Poll the page's state until `done` (errors while a page is loading count as not yet).
-fn wait_for(cdp: &mut Cdp, state_js: &str, what: &str, done: impl Fn(&Value) -> bool) -> Result<(), String> {
+pub(crate) fn wait_for(cdp: &mut Cdp, state_js: &str, what: &str, done: impl Fn(&Value) -> bool) -> Result<(), String> {
     let t = Instant::now();
     let mut last = Value::Null;
     while t.elapsed() < LAUNCH_TIMEOUT {
@@ -554,11 +554,15 @@ fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// A scratch directory, removed when dropped.
-struct TempDir(PathBuf);
+pub(crate) struct TempDir(pub(crate) PathBuf);
 
 impl TempDir {
     fn new() -> Result<TempDir, String> {
-        let dir = std::env::temp_dir().join(format!("solidcraft-web-offline-test-{}", std::process::id()));
+        TempDir::named("solidcraft-web-offline-test")
+    }
+
+    pub(crate) fn named(name: &str) -> Result<TempDir, String> {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(TempDir(dir))
@@ -807,7 +811,7 @@ fn answer(mut stream: TcpStream, shared: &Mutex<Mode>, seen: &Counters, elsewher
 
 // ---- Headless Chrome ----------------------------------------------------------------------------
 
-fn find_chrome() -> Option<PathBuf> {
+pub(crate) fn find_chrome() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("CHROME") {
         return Some(PathBuf::from(p));
     }
@@ -826,13 +830,13 @@ fn find_chrome() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-struct Chrome {
+pub(crate) struct Chrome {
     child: Child,
     profile: PathBuf,
 }
 
 impl Chrome {
-    fn launch(exe: &Path, profile: &Path) -> Result<Chrome, String> {
+    pub(crate) fn launch(exe: &Path, profile: &Path) -> Result<Chrome, String> {
         let mut c = Command::new(exe);
         c.arg("--headless=new")
             .arg(format!("--user-data-dir={}", profile.display()))
@@ -848,7 +852,7 @@ impl Chrome {
     }
 
     /// The DevTools connection to Chrome's page.
-    fn connect(&self) -> Result<Cdp, String> {
+    pub(crate) fn connect(&self) -> Result<Cdp, String> {
         let port = self.port()?;
         let list: Value = serde_json::from_slice(&http(port, "GET", "/json/list")?).map_err(|e| format!("/json/list: {e}"))?;
         let page = list.as_array().and_then(|l| l.iter().find(|t| t["type"] == "page")).ok_or("Chrome has no page to drive")?;
@@ -856,7 +860,7 @@ impl Chrome {
     }
 
     /// The DevTools connection to a new tab.
-    fn new_tab(&self) -> Result<Cdp, String> {
+    pub(crate) fn new_tab(&self) -> Result<Cdp, String> {
         let port = self.port()?;
         let tab: Value = serde_json::from_slice(&http(port, "PUT", "/json/new?about:blank")?).map_err(|e| format!("/json/new: {e}"))?;
         Cdp::to_target(port, &tab)
@@ -909,7 +913,7 @@ fn http(port: u16, method: &str, path: &str) -> Result<Vec<u8>, String> {
 }
 
 /// A minimal DevTools protocol client: JSON messages over a WebSocket.
-struct Cdp {
+pub(crate) struct Cdp {
     stream: TcpStream,
     next: u64,
 }
@@ -1010,7 +1014,7 @@ impl Cdp {
     }
 
     /// Call a DevTools method and return its result.
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next += 1;
         let id = self.next;
         self.send_frame(0x1, json!({ "id": id, "method": method, "params": params }).to_string().as_bytes())?;
@@ -1026,7 +1030,7 @@ impl Cdp {
     }
 
     /// Evaluate a JavaScript expression in the page (awaiting a promise) and return its value.
-    fn eval(&mut self, expr: &str) -> Result<Value, String> {
+    pub(crate) fn eval(&mut self, expr: &str) -> Result<Value, String> {
         let r = self.call("Runtime.evaluate", json!({ "expression": expr, "awaitPromise": true, "returnByValue": true }))?;
         if let Some(e) = r.get("exceptionDetails") {
             return Err(e["exception"]["description"].as_str().unwrap_or("exception").to_string());
