@@ -19,6 +19,8 @@ pub struct Request {
     pub body: Vec<u8>,
     /// The client keeps the connection open for another request.
     pub keep_alive: bool,
+    /// It has a body that was not read (it is answered from its head): the connection must close.
+    pub unread_body: bool,
 }
 
 impl Request {
@@ -52,9 +54,10 @@ pub enum Incoming {
     Refused(Refusal),
 }
 
-/// Read one request from `reader`, with a body of at most `max_body` bytes. `out` gets the
+/// Read one request from `reader`. `limit` says from its head how large a body is read (`None`:
+/// none, as for a request refused from its head, such as one without the token). `out` gets the
 /// interim `100 Continue` a client may wait for before it sends the body.
-pub fn read_request(reader: &mut impl BufRead, out: &mut impl Write, max_body: usize) -> Incoming {
+pub fn read_request(reader: &mut impl BufRead, out: &mut impl Write, limit: impl FnOnce(&Request) -> Option<usize>) -> Incoming {
     let head = match read_head(reader) {
         Ok(Some(head)) => head,
         Ok(None) => return Incoming::Closed,
@@ -74,7 +77,7 @@ pub fn read_request(reader: &mut impl BufRead, out: &mut impl Write, max_body: u
     let path = target.split(['?', '#']).next().unwrap_or("").to_string();
     let headers: Vec<(String, String)> =
         parsed.headers.iter().map(|h| (h.name.to_ascii_lowercase(), String::from_utf8_lossy(h.value).trim().to_string())).collect();
-    let mut req = Request { method: method.to_string(), path, headers, body: Vec::new(), keep_alive: false };
+    let mut req = Request { method: method.to_string(), path, headers, body: Vec::new(), keep_alive: false, unread_body: false };
     // HTTP/1.1 keeps the connection unless told otherwise; 1.0 only when asked.
     req.keep_alive = if minor >= 1 { !req.header_has("connection", "close") } else { req.header_has("connection", "keep-alive") };
     let chunked = req.header_has("transfer-encoding", "chunked");
@@ -89,10 +92,14 @@ pub fn read_request(reader: &mut impl BufRead, out: &mut impl Write, max_body: u
     if req.header("transfer-encoding").is_some() && !chunked {
         return Incoming::Refused(refuse(501, "unsupported Transfer-Encoding"));
     }
+    let has_body = chunked || length.is_some_and(|n| n > 0);
+    let Some(max_body) = limit(&req) else {
+        req.unread_body = has_body;
+        return Incoming::Request(req);
+    };
     if length.is_some_and(|n| n > max_body) {
         return Incoming::Refused(refuse(413, "request body too large"));
     }
-    let has_body = chunked || length.is_some_and(|n| n > 0);
     if has_body && req.header_has("expect", "100-continue") && out.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").and_then(|()| out.flush()).is_err() {
         return Incoming::Closed;
     }
@@ -268,7 +275,7 @@ mod tests {
 
     fn read(raw: &[u8]) -> (Incoming, Vec<u8>) {
         let mut out = Vec::new();
-        let r = read_request(&mut std::io::BufReader::new(raw), &mut out, 64);
+        let r = read_request(&mut std::io::BufReader::new(raw), &mut out, |_| Some(64));
         (r, out)
     }
 
@@ -299,6 +306,14 @@ mod tests {
         let r = request(b"\r\nGET /healthz HTTP/1.0\r\n\r\n");
         assert_eq!((r.path.as_str(), r.keep_alive, r.body.len()), ("/healthz", false, 0));
         assert!(matches!(read(b"").0, Incoming::Closed));
+    }
+
+    #[test]
+    fn a_body_can_be_left_unread() {
+        let mut out = Vec::new();
+        let raw = b"POST /mcp HTTP/1.1\r\nExpect: 100-continue\r\nContent-Length: 99999999\r\n\r\n";
+        let Incoming::Request(r) = read_request(&mut std::io::BufReader::new(&raw[..]), &mut out, |_| None) else { panic!("not a request") };
+        assert!(r.unread_body && r.body.is_empty() && out.is_empty(), "no body read, no 100 Continue");
     }
 
     #[test]

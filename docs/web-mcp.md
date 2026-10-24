@@ -55,11 +55,11 @@ cad.example.de {
 }
 ```
 
-Caddy and Traefik pass WebSockets on by themselves and don't cut long responses short. With
-nginx (or Nginx Proxy Manager), turn on "Websockets Support" and set `proxy_read_timeout 3800s;`. The proxy should pass the original
-`Host` (or `X-Forwarded-Host`) and `X-Forwarded-Proto`: the relay compares the page's origin with
-it, and names the app's address in its hints (`SOLIDCRAFT_RELAY_PUBLIC_URL` sets that address
-outright).
+Caddy and Traefik pass WebSockets on by themselves, and by default don't cut a long response
+short. With nginx (or Nginx Proxy Manager), turn on "Websockets Support" and set
+`proxy_read_timeout 3800s;`. The proxy should pass the original `Host` (or `X-Forwarded-Host`)
+and `X-Forwarded-Proto`: the relay compares the page's origin with it, and names the app's
+address in its hints (`SOLIDCRAFT_RELAY_PUBLIC_URL` sets that address outright).
 
 Without the relay (`docker compose up -d web`, or the web image alone) the app works as before:
 `/mcp` and `/bridge` answer 502 and the tab simply doesn't connect.
@@ -99,7 +99,8 @@ solidcraft.agent.disconnect();             // end it and forget the token
 **Keep the tab in front.** A browser draws no frames for a tab in the background or a minimised
 window, and the app runs requests between frames. A request that arrives while the tab is hidden
 is refused unrun at once (`not run: the SolidCraft tab is in the background…`), so the agent
-can send it again later. Give SolidCraft a window of its own, or install it as an app (File › Install app…), and leave that window visible while the agent works.
+can send it again later. Give SolidCraft a window of its own, or install it as an app
+(File › Install app…), and leave that window visible while the agent works.
 
 **One tab at a time.** The newest tab to connect wins: the one before is closed with a reason,
 says "Another tab took over the AI agent connection" and offers **Reconnect**; it doesn't come
@@ -200,7 +201,8 @@ password.
   expose it, use a long random token and HTTPS only.
 - Rotate the token by changing it in `.env` and `docker compose up -d`: agents and tabs with the
   old one are refused (tabs show "refused"; open the app once more with `#mcp=<new token>`).
-- Every `/mcp` request needs `Authorization: Bearer <token>` (401 otherwise); the tab shows the
+- Every `/mcp` request needs `Authorization: Bearer <token>` (401 otherwise, answered from the
+  request's head: the body of a request without the token is never read); the tab shows the
   token as its first WebSocket message. Tokens are compared in constant time and never logged.
 - A browser page may open the bridge (or call `/mcp`) only from the relay's own site, or one
   named in `SOLIDCRAFT_RELAY_ALLOWED_ORIGIN` (403 otherwise), against DNS rebinding and other

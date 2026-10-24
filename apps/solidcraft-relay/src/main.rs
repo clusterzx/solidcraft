@@ -35,6 +35,14 @@ use crate::http::{Incoming, Response};
 pub const MAX_CONNECTIONS: usize = 64;
 /// How long a connection may wait between requests, or take to send one.
 const IDLE: Duration = Duration::from_secs(120);
+/// The largest body read for a request other than an agent's.
+const SMALL_BODY: usize = 64 * 1024;
+
+/// What a request is for: the last part of its path (`mcp`, `bridge`, `healthz`), so the relay
+/// works under a path prefix too.
+fn route(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or("")
+}
 
 const USAGE: &str = "solidcraft-relay: SolidCraft's MCP server for the web app (docs/web-mcp.md)
 
@@ -127,7 +135,14 @@ fn connection(relay: &Relay, stream: TcpStream) {
     let mut out = stream;
     let mut reader = BufReader::with_capacity(64 * 1024, read);
     loop {
-        let req = match http::read_request(&mut reader, &mut out, solidcraft_engine::MAX_LINE) {
+        // A body is read only for a request that may have one: an agent's (with the token), up to
+        // the control channel's line; anything else is answered from its head.
+        let limit = |req: &http::Request| match route(&req.path) {
+            "mcp" if mcp::authorized(req, &relay.config.token) => Some(solidcraft_engine::MAX_LINE),
+            "mcp" => None,
+            _ => Some(SMALL_BODY),
+        };
+        let req = match http::read_request(&mut reader, &mut out, limit) {
             Incoming::Request(r) => r,
             Incoming::Closed => return,
             Incoming::Refused(r) => {
@@ -135,8 +150,7 @@ fn connection(relay: &Relay, stream: TcpStream) {
                 return;
             }
         };
-        let route = req.path.rsplit('/').next().unwrap_or("");
-        let response = match route {
+        let response = match route(&req.path) {
             "mcp" => mcp::handle(relay, &req),
             "bridge" => match bridge::serve(relay, &req, reader, &peer) {
                 Some(refusal) => {
@@ -151,7 +165,8 @@ fn connection(relay: &Relay, stream: TcpStream) {
         if response.status == 401 {
             eprintln!("solidcraft-relay: refused {} {} from {peer}: no or wrong token", req.method, req.path);
         }
-        if response.write(&mut out, req.keep_alive).is_err() || !req.keep_alive || response.close {
+        // A body left unread is still on the connection: it can't carry another request.
+        if response.write(&mut out, req.keep_alive && !req.unread_body).is_err() || !req.keep_alive || req.unread_body || response.close {
             return;
         }
     }

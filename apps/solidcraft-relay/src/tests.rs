@@ -204,6 +204,12 @@ fn agents_need_the_token() {
         assert!(!String::from_utf8_lossy(&r.body).contains(TOKEN));
     }
     assert_eq!(http(addr, "GET", "/mcp", &[], b"").status, 401);
+    // Refused from its head: the body of a request without the token is never read.
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.write_all(format!("POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n", solidcraft_engine::MAX_LINE).as_bytes()).unwrap();
+    let mut status = String::new();
+    BufReader::new(s).read_line(&mut status).unwrap();
+    assert!(status.starts_with("HTTP/1.1 401"), "{status}");
     assert_eq!(http(addr, "POST", "/mcp", &[AUTH], init.as_bytes()).status, 200);
     assert_eq!(http(addr, "POST", "/mcp", &[("authorization", "bearer test-token-0123456789abcdef0123456789")], init.as_bytes()).status, 200);
     // Not secret: the health check, and what isn't there.

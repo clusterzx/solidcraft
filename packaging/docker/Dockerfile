@@ -62,8 +62,11 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 WORKDIR /src
 COPY . .
+# Without the release profile's line tables (they are for the desktop app's crash reports and
+# would make this binary several times its size).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target-relay,id=solidcraft-relay-${TARGETARCH} \
+    CARGO_PROFILE_RELEASE_DEBUG=false CARGO_PROFILE_RELEASE_STRIP=debuginfo \
     cargo build --release --locked -p solidcraft-relay --target "$(cat /rust-target)" --target-dir /src/target-relay \
  && cp "/src/target-relay/$(cat /rust-target)/release/solidcraft-relay" /usr/local/bin/solidcraft-relay
 
