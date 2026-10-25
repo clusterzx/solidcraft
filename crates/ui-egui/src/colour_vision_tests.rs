@@ -517,6 +517,7 @@ const NO_MEANING: &[(&str, &str)] = &[
     ("origin_point", "the origin, alone"),
     ("construction_plane", "a plane"),
     ("body_edge", "the model's edges"),
+    ("sketch_halo", "neutral rim beneath sketch curves; the curves carry the state colours"),
     ("grid", "the grid"),
     ("grid_major", "the grid"),
     ("profile_fill", "a closed profile's tint"),
@@ -879,7 +880,7 @@ fn the_shader_gets_the_modes_colours_and_its_stripes() {
 #[test]
 fn the_sections_messages_are_in_every_catalog() {
     let load = |text: &str| -> serde_json::Map<String, serde_json::Value> { serde_json::from_str(text).unwrap() };
-    let english = load(include_str!("../../../assets/locales/en.json"));
+    let english = load(include_str!(concat!(env!("OUT_DIR"), "/locales/en.json")));
     let ids: Vec<&str> = ColorVision::ALL
         .into_iter()
         .flat_map(|m| [m.label_id(), m.help_id()])
@@ -887,14 +888,14 @@ fn the_sections_messages_are_in_every_catalog() {
         .chain(["ui.colour_vision", "ui.colour_vision_mode", "ui.colour_vision_sample", "ui.colour_vision_note"])
         .collect();
     for (lang, text) in [
-        ("cs", include_str!("../../../assets/locales/cs.json")),
-        ("da", include_str!("../../../assets/locales/da.json")),
-        ("de", include_str!("../../../assets/locales/de.json")),
-        ("ja", include_str!("../../../assets/locales/ja.json")),
-        ("ko", include_str!("../../../assets/locales/ko.json")),
-        ("pl", include_str!("../../../assets/locales/pl.json")),
-        ("ru", include_str!("../../../assets/locales/ru.json")),
-        ("zh", include_str!("../../../assets/locales/zh.json")),
+        ("cs", include_str!(concat!(env!("OUT_DIR"), "/locales/cs.json"))),
+        ("da", include_str!(concat!(env!("OUT_DIR"), "/locales/da.json"))),
+        ("de", include_str!(concat!(env!("OUT_DIR"), "/locales/de.json"))),
+        ("ja", include_str!(concat!(env!("OUT_DIR"), "/locales/ja.json"))),
+        ("ko", include_str!(concat!(env!("OUT_DIR"), "/locales/ko.json"))),
+        ("pl", include_str!(concat!(env!("OUT_DIR"), "/locales/pl.json"))),
+        ("ru", include_str!(concat!(env!("OUT_DIR"), "/locales/ru.json"))),
+        ("zh", include_str!(concat!(env!("OUT_DIR"), "/locales/zh.json"))),
     ] {
         let catalog = load(text);
         for id in &ids {

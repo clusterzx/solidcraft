@@ -146,6 +146,8 @@ pub struct Harness {
     /// The last frame's platform output (with its accessibility tree: dialog widgets are found
     /// by their text there).
     pub output: egui::PlatformOutput,
+    /// The last frame's painted shapes.
+    pub shapes: Vec<egui::epaint::ClippedShape>,
     /// Files the scenario saves and opens live here; file pickers answer from it.
     pub dir: PathBuf,
     /// The file the next Open picker returns (a `choose_file` step).
@@ -183,6 +185,7 @@ impl Harness {
                 ctx
             },
             output: Default::default(),
+            shapes: Vec::new(),
             dir: scratch_dir(),
             next_file: Rc::new(RefCell::new(None)),
             queue: None,
@@ -214,11 +217,18 @@ impl Harness {
 
     /// Lay out and draw one frame (feeding queued pointer and key events).
     pub fn frame(&mut self) {
+        self.frame_with(Vec::new());
+    }
+
+    /// One frame that receives all these events at once (a quick tap, or input queued during a
+    /// slow frame), before any queued ones.
+    pub fn frame_with(&mut self, events: Vec<egui::Event>) {
         self.time += 1.0 / 60.0;
         let mut raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
             time: Some(self.time),
             focused: true,
+            events,
             ..Default::default()
         };
         self.app.raw_input_hook(&mut raw);
@@ -230,6 +240,7 @@ impl Harness {
         // Nothing is painted: drop the frame's texture changes.
         out.textures_delta.clear();
         self.output = out.platform_output;
+        self.shapes = out.shapes;
     }
 
     pub fn frames(&mut self, n: usize) {

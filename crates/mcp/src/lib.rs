@@ -16,7 +16,7 @@ mod stdio;
 mod tab;
 mod tools;
 
-pub use backend::{Backend, Headless, Remote};
+pub use backend::{Auto, Backend, Headless, Remote};
 pub use server::{PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server};
 pub use tab::{HeadlessMode, SharedHeadless, TabBackend, TabLink, TabWaits};
 pub use tools::{call_tool, tool_definitions};

@@ -178,6 +178,7 @@ impl Tokens {
             body_selected: Color32::from_rgb(110, 170, 235),
             sketch: Color32::from_rgb(30, 90, 200),
             sketch_fixed: Color32::from_rgb(20, 20, 20),
+            sketch_halo: Color32::from_rgb(240, 243, 247),
             sketch_point: Color32::BLACK,
             sketch_locked: Color32::from_rgb(0, 140, 60),
             dimension: Color32::from_rgb(36, 40, 48),
@@ -336,6 +337,7 @@ impl Tokens {
         t.body_edge = Color32::from_rgb(16, 16, 18);
         t.sketch = Color32::from_rgb(92, 150, 255);
         t.sketch_fixed = Color32::from_rgb(232, 234, 238);
+        t.sketch_halo = Color32::from_rgb(28, 32, 40);
         t.sketch_point = Color32::from_rgb(232, 234, 238);
         t.sketch_locked = Color32::from_rgb(96, 204, 116);
         t.dimension = Color32::from_rgb(224, 228, 234);

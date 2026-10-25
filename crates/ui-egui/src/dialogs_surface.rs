@@ -195,9 +195,9 @@ fn inputs(k: &Surf) -> Vec<SelInput> {
 }
 
 /// The dialog for a surface command.
-pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
+pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     let k = match id {
-        "surface.extrude" => Surf::Extrude { distance: "10 mm".into(), direction: 0 },
+        "surface.extrude" => Surf::Extrude { distance: crate::dialogs::length_default(&app.session, "10"), direction: 0 },
         "surface.revolve" => Surf::Revolve { angle: "360 deg".into(), symmetric: false, axis: None },
         "surface.sweep" => Surf::Sweep(crate::dialogs_sweep::SweepOpts::default()),
         "surface.loft" => Surf::Loft { rail_fit: 0 },
@@ -206,14 +206,16 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
         "surface.patch" => Surf::Patch { continuity: 0 },
         "surface.unstitch" => Surf::Unstitch,
         "surface.reverse_normal" => Surf::ReverseNormal,
-        "surface.ruled" => Surf::Ruled { distance: "10 mm".into(), mode: 0, angle: "5 deg".into(), flip: false, round: false },
+        "surface.ruled" => {
+            Surf::Ruled { distance: crate::dialogs::length_default(&app.session, "10"), mode: 0, angle: "5 deg".into(), flip: false, round: false }
+        }
         "surface.trim" => Surf::Trim { extend: false, stitch: false, direction: None },
         "surface.untrim" => Surf::Untrim { holes: 0, outer: false, in_place: false },
         "solid.split_face" => Surf::SplitFace,
         _ => Surf::simple_start(id)?.0,
     };
     let i = inputs(&k);
-    Some((Kind::Surface(k), i))
+    Some((crate::length_input::defaults(&app.session.doc, Kind::Surface(k)), i))
 }
 
 /// The rows after the inputs; true when Enter was pressed in a field.

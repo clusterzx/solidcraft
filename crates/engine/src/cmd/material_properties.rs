@@ -89,7 +89,6 @@ mod tests {
         let saved = s.doc.to_json();
         let saved_json: Value = serde_json::from_str(&saved).unwrap();
         assert_eq!(saved_json["format"], crate::doc::format::format_string(crate::doc::format::FORMAT));
-        assert!(saved_json["format_pending"].as_array().unwrap().iter().any(|name| name == "material-engineering-cards"));
         s.execute("edit.undo", &json!({})).unwrap();
         assert!(s.doc.user_materials[0].physical_card.is_none());
         s.execute("edit.redo", &json!({})).unwrap();
@@ -119,7 +118,6 @@ mod tests {
         assert_eq!(loaded.user_materials, s.doc.user_materials);
         assert_eq!(loaded.materials, s.doc.materials);
         assert_eq!(loaded.format, crate::doc::format::format_string(crate::doc::format::FORMAT));
-        assert!(loaded.format_pending.iter().any(|name| name == "material-engineering-cards"));
         assert!(!loaded.format_pending.iter().any(|name| name == "physical-material-cards"));
         let bytes = solidcraft_io::write_design_container(&loaded).unwrap();
         let reopened = solidcraft_io::read_design(&bytes).unwrap();

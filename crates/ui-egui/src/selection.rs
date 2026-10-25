@@ -65,6 +65,8 @@ pub const ORIGIN: Accept = 4096;
 /// Curves of any sketch, picked with their sketch (`ExternalSketchCurve`): curve ids are a
 /// sketch's own, so two sketches can both have a `w2` (frame member lines).
 pub const SKETCH_LINES: Accept = 8192;
+/// Sketch points with an explicit source sketch; only for commands that consume external references.
+pub const EXTERNAL_POINTS: Accept = 16384;
 
 /// One selection input of a command dialog ("Profiles", "Edges", "Plane", ...).
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +107,7 @@ impl SelInput {
             Hit::SketchCurve { id, straight: true, .. } if a & AXES != 0 => Some(Sel::SketchCurve { id: id.clone() }),
             Hit::SketchCurve { sketch, id, .. } if a & SKETCH_LINES != 0 => Some(Sel::ExternalSketchCurve { sketch: *sketch, id: id.clone() }),
             Hit::SketchCurve { id, .. } if a & CURVES != 0 => Some(Sel::SketchCurve { id: id.clone() }),
+            Hit::SketchPoint { sketch, id, .. } if a & EXTERNAL_POINTS != 0 => Some(Sel::ExternalSketchPoint { sketch: *sketch, id: id.clone() }),
             Hit::SketchPoint { id, .. } if a & SKETCH_POINTS != 0 => Some(Sel::SketchPoint { id: id.clone() }),
             Hit::SketchPoint { sketch, id, .. } if a & POINTS != 0 => Some(Sel::SketchPoint { id: format!("{sketch}:{id}") }),
             Hit::Vertex { body, point } if body.is_empty() && a & ORIGIN != 0 => Some(Sel::Vertex { body: String::new(), point: *point }),

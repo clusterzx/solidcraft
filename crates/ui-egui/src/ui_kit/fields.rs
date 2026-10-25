@@ -287,6 +287,7 @@ pub(crate) struct Selection {
     pub filled: bool,
 }
 
+/// Three looks: the active input in accent, a filled one in a quiet neutral tint, an empty one plain.
 pub(crate) fn selection_field(ui: &mut Ui, text: &str, options: Selection) -> Response {
     let Selection { active, filled } = options;
     let t = Tokens::get();
@@ -294,11 +295,22 @@ pub(crate) fn selection_field(ui: &mut Ui, text: &str, options: Selection) -> Re
     if active && !filled {
         ui.painter().rect_filled(rect, t.control_radius, t.selected_bg);
     }
+    let (fill, border) = match (active, filled) {
+        (true, true) => (t.selected_bg, t.form_primary),
+        (true, false) => (t.control_fill, t.form_primary),
+        (false, true) => (t.control_fill.lerp_to_gamma(t.form_ink, 0.06), t.control_border.lerp_to_gamma(t.form_ink, 0.35)),
+        (false, false) => (t.control_fill, t.control_border),
+    };
     ui.painter().rect(
         if active && !filled { rect.shrink(t.space_2) } else { rect },
         t.control_radius,
-        if filled { t.selected_bg } else { t.control_fill },
-        if active || filled { egui::Stroke::new(1.0, t.form_primary) } else { t.control_border_stroke(t.control_border) },
+        fill,
+        match (active, filled) {
+            (true, _) => egui::Stroke::new(1.0, border),
+            // A theme's control border can fix its own colour; a filled field keeps its tint.
+            (false, true) => egui::Stroke::new(t.control_border_stroke(border).width, border),
+            (false, false) => t.control_border_stroke(border),
+        },
         egui::StrokeKind::Inside,
     );
     let end = if filled { t.space_24 } else { t.space_8 };
@@ -306,7 +318,18 @@ pub(crate) fn selection_field(ui: &mut Ui, text: &str, options: Selection) -> Re
         rect.min + vec2(t.form_inset.min(rect.width()), 0.0),
         egui::pos2((rect.right() - end).max(rect.left() + t.form_inset.min(rect.width())), rect.bottom()),
     );
-    paint_text(ui, text_rect, text, crate::fonts::medium(t.font_label), if filled { t.selected_ink } else { t.form_dim }, false);
+    paint_text(
+        ui,
+        text_rect,
+        text,
+        crate::fonts::medium(t.font_label),
+        match (active, filled) {
+            (true, true) => t.selected_ink,
+            (false, true) => t.form_ink,
+            _ => t.form_dim,
+        },
+        false,
+    );
     publish(ui, &response, egui::WidgetType::Button);
     scenario::publish_rect(&format!("dialog:field:{}", label(ui)), rect);
     scenario::publish_count(&format!("dialog:selection:{}:filled", label(ui)), f64::from(filled));
@@ -487,6 +510,20 @@ pub(crate) fn scalar_field(ui: &mut Ui, value: &mut f64, range: std::ops::RangeI
 pub(crate) fn length_field(ui: &mut Ui, value: &mut f64, units: &str, decimals: u8) -> Response {
     let response = ui.add(length_drag(value, units, decimals));
     Tokens::get().input_bevel(ui, &response);
+    scenario::publish_target(&format!("dialog:length:{}", label(ui)), response.rect);
+    response
+}
+
+/// A model-space length with tool-specific bounds and drag step, shown in design units.
+pub(crate) fn bounded_length_field(
+    ui: &mut Ui,
+    value: &mut f64,
+    units: &str,
+    decimals: u8,
+    range: std::ops::RangeInclusive<f64>,
+    speed: f64,
+) -> Response {
+    let response = ui.add(length_drag(value, units, decimals).range(range).speed(speed));
     scenario::publish_target(&format!("dialog:length:{}", label(ui)), response.rect);
     response
 }

@@ -168,6 +168,7 @@
     "sketch_centerline": "#808000",
     "sketch_construction": "#808000",
     "sketch_fixed": "#000000",
+    "sketch_halo": "#ffffff",
     "sketch_ink": "#005400",
     "sketch_locked": "#008000",
     "sketch_lost": "#800080",
