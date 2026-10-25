@@ -44,7 +44,7 @@ pub(crate) fn commands(app: &SolveApp, k: &TextMove) -> Result<Vec<(String, Valu
     let mut values = [0.0; 3];
     for (i, (input, value)) in k.values.iter().zip(&mut values).enumerate() {
         let kind = if i == 2 { ValueKind::Angle } else { ValueKind::Length };
-        *value = doc.eval(&doc.with_design_unit(input.trim(), kind), kind).map_err(|e| e.to_string())?;
+        *value = crate::length_input::eval(doc, input.trim(), kind).map_err(|e| e.to_string())?;
         if !value.is_finite() {
             return Err("Move values must be finite".into());
         }

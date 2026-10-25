@@ -53,6 +53,7 @@
     "body_selected": "#83a598",
     "sketch": "#076678",
     "sketch_fixed": "#282828",
+    "sketch_halo": "#fbf8e3",
     "sketch_locked": "#79740e",
     "dimension": "#3c3836",
     "dimension_driven": "#7c6f64",

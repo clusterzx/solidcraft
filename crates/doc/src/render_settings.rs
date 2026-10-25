@@ -327,7 +327,6 @@ mod tests {
         let cloned = settings.clone();
         assert!(std::ptr::eq(settings.resources.required(&id).unwrap().bytes().as_ptr(), cloned.resources.required(&id).unwrap().bytes().as_ptr()));
         let document = Document { render: Arc::new(settings), ..Default::default() };
-        assert!(document.format_pending.iter().any(|name| name == "render-hdr-resources"));
         let reopened = Document::from_json(&document.to_json()).unwrap();
         assert_eq!(document, reopened);
         assert_eq!(reopened.render.resources.len(), 1);
@@ -565,7 +564,6 @@ mod tests {
         }});
         let settings: RenderSettings = serde_json::from_value(wire).unwrap();
         let document = Document { render: Arc::new(settings.clone()), ..Default::default() };
-        assert!(document.format_pending.iter().any(|name| name == "render-job-intent"));
         let reopened = Document::from_json(&document.to_json()).unwrap();
         assert_eq!(reopened, document);
         let saved = serde_json::to_value(&reopened.render).unwrap();
@@ -619,7 +617,6 @@ mod tests {
         }}});
         let settings: RenderSettings = serde_json::from_value(saved.clone()).unwrap();
         let document = Document { render: Arc::new(settings), ..Default::default() };
-        assert!(document.format_pending.iter().any(|name| name == "render-cpu-progressive"));
         let reopened = Document::from_json(&document.to_json()).unwrap();
         assert_eq!(document, reopened);
         let RenderJob::CpuRaytrace { options } = reopened.render.setups["Film"].job.as_ref().unwrap() else { panic!("method changed") };

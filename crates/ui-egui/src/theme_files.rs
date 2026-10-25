@@ -305,7 +305,7 @@ theme_keys! {
         sel_profile_edge, hover_profile, hover_profile_edge, sel_vertex, origin_plane, origin_plane_edge, origin_plane_hover,
         origin_point, axis_x, axis_y, axis_z, construction_plane, construction_geom, body, body_edge, manipulator,
         preview_add, preview_new, preview_sketch, preview_cut, cube_face, cube_border, cube_text, cube_hover, viewport_top,
-        viewport_bottom, grid, grid_major, body_selected, sketch, sketch_fixed, sketch_locked, dimension, dimension_driven,
+        viewport_bottom, grid, grid_major, body_selected, sketch, sketch_fixed, sketch_halo, sketch_locked, dimension, dimension_driven,
         sketch_point, sketch_point_free, dialog_bg, dialog_border, chip, section_cap,
         profile_fill, glyph_bg, glyph_edge, glyph_text, overlay, rubber_band, app_bar_text, app_bar_hover, timeline_item,
         timeline_item_error, timeline_marker, field, box_window, box_crossing, sketch_projected, sketch_lost,

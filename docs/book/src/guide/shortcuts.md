@@ -41,6 +41,10 @@ if that happens; recording is cancelled if the app loses focus.
 | Ctrl+Z | Undo | Ctrl+Y | Redo |
 | Ctrl+N | New Design | Ctrl+O | Open |
 | Ctrl+S | Save | Delete | Delete the selection |
+| Ctrl+1 | Front View | Ctrl+2 | Back View |
+| Ctrl+3 | Left View | Ctrl+4 | Right View |
+| Ctrl+5 | Top View | Ctrl+6 | Bottom View |
+| Ctrl+7 | Isometric View | | |
 
 Keys handled by the window itself:
 
@@ -58,7 +62,9 @@ Keys handled by the window itself:
 While a value box has the keyboard (a dimension being added, a dialog field), keys type into
 it and single-letter shortcuts don't fire. With Sketch Dimension (D), the box opens as soon as
 you click a line, circle or arc (or the second point or line), so D, click, type the value,
-Enter.
+Enter. With Preferences › Design › Step values with the arrow keys and the wheel on, ↑ ↓ in a
+value box, or the wheel over it, step a plain number by 1 (with Shift by 10, with Alt by 0.1);
+see [Parameters and expressions](parameters.md).
 
 Mouse and touch:
 
@@ -84,7 +90,7 @@ While drawing or dragging a sketch point:
 | Keys | Action |
 |---|---|
 | Ctrl/Cmd or Alt/Option (default) | suppress auto-snap for that gesture |
-| Shift | prefer a line midpoint when targeting |
+| Shift | prefer a line midpoint when targeting (skips a curve-curve crossing) |
 
 Change the snap-suppress chord in Preferences › Sketch. Selection still uses Shift and
 Ctrl/Cmd to add or toggle (Preferences › Selection can make Shift add-only).

@@ -977,10 +977,11 @@ fn desktop_body(app: &mut SolveApp, ui: &mut egui::Ui) {
                         crate::scenario::publish_handle("agent_chat:pick_context", picker.rect.center());
                         pick_clicked = picker.clicked();
                         if let Some(turn) = &app.agent_chat.turn {
-                            let count = trf(
-                                "ui.agent_chat_changes_of",
-                                &[("n", &turn.changes.to_string()), ("limit", &app.preferences.agent_chat_turn_limit.to_string())],
-                            );
+                            let n = turn.changes.to_string();
+                            let count = match app.preferences.agent_chat_turn_limit {
+                                0 => trf("ui.agent_chat_changes_n", &[("n", &n)]),
+                                limit => trf("ui.agent_chat_changes_of", &[("n", &n), ("limit", &limit.to_string())]),
+                            };
                             ui.label(RichText::new(count).color(Tokens::get().text_dim).size(Tokens::get().font_small));
                         }
                     },

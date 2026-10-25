@@ -101,6 +101,7 @@ Editable drawing code, native projects and shipped exports are collected under `
 | tests/step-conformance/tiny_pin.step | step-conformance contributors | generated from formulas by https://github.com/dan335/step-conformance (corpus/generated, 96f30bb); import regression fixture | CC0-1.0 |
 | tests/step-conformance/torus_ring_nurbs.step | step-conformance contributors | generated from formulas by https://github.com/dan335/step-conformance (corpus/generated, 96f30bb); import regression fixture | CC0-1.0 |
 | tests/step-conformance/washer.step | step-conformance contributors | generated from formulas by https://github.com/dan335/step-conformance (corpus/generated, 96f30bb); import regression fixture | CC0-1.0 |
+| tests/step-regressions/rod_doubled_edge.step | SolidCraft contributors | written by SolidCraft from the commands of #4598 (a bored rod moved 100 mm and exported); import regression fixture | MIT OR Apache-2.0 |
 | tests/oracle/17-loft/reference.stl | SolidCraft contributors | triangulation of our own recipe (tests/oracle/17-loft/recipe.json) built with FreeCAD as an external tool by tools/freecad-oracle | MIT OR Apache-2.0 |
 | tests/oracle/23-bracket-multifeature/reference.stl | SolidCraft contributors | triangulation of our own recipe (tests/oracle/23-bracket-multifeature/recipe.json) built with FreeCAD as an external tool by tools/freecad-oracle | MIT OR Apache-2.0 |
 | tests/oracle/28-blind-pocket-fillets/reference.stl | SolidCraft contributors | triangulation of our own recipe (tests/oracle/28-blind-pocket-fillets/recipe.json) built with FreeCAD as an external tool by tools/freecad-oracle | MIT OR Apache-2.0 |
@@ -512,6 +513,7 @@ Editable drawing code, native projects and shipped exports are collected under `
 
 | docs/book/src/og.png | SolidCraft contributors | copy of assets/branding/web/source/og.png staged by cargo xtask book (gitignored) | MIT OR Apache-2.0 |
 | docs/sponsors/blacksmith-ci-powered.png | Blacksmith (blacksmith.sh) | "CI powered by Blacksmith" sponsor banner supplied by Blacksmith for the sponsorship credit; used only to credit the sponsor, not part of the application | © Blacksmith, used with permission |
+| assets/icons/ui/design/svg/model/path_flange.svg | SolidCraft contributors | original icon master (64 grid) | MIT OR Apache-2.0 |
 
 ## Code adapted from sibling projects
 

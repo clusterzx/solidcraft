@@ -186,6 +186,15 @@ pub(crate) fn pinch_factor(input: &egui::InputState) -> f32 {
         .fold(1.0, |acc, f| acc * f)
 }
 
+/// Give this frame's wheel to the widget under the pointer that uses it itself (a value field
+/// stepping its number, `value_step`): no scroll area or camera under it moves as well.
+pub(crate) fn claim_wheel(ctx: &egui::Context) {
+    ctx.input_mut(|i| {
+        i.smooth_scroll_delta = egui::Vec2::ZERO;
+        i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+    });
+}
+
 /// Zoom anchor: the model point under the cursor, else the target's depth.
 /// Preferences › Navigation › Zoom to the cursor (off: toward the view's centre).
 pub(crate) fn zoom_anchor(app: &mut SolveApp, rect: egui::Rect, hover: Option<egui::Pos2>, surface: bool) -> Option<Vec3> {
@@ -1529,6 +1538,42 @@ mod view_key_tests {
         assert!(turn(mid.yaw, anim.from.yaw).abs() < 15f64.to_radians(), "continues from the camera as it is");
         h.settle();
         assert!((turn(before, h.app.cam.yaw).abs() - 30f64.to_radians()).abs() < 1e-6);
+    }
+
+    /// Ctrl+1…7 run Front … Isometric View by default, turning the view as the view cube's faces
+    /// do; the keys are ordinary shortcuts, so one can be moved to another command and back.
+    #[test]
+    fn ctrl_digits_turn_to_the_standard_views_and_can_be_rebound() {
+        use solidcraft_engine::render::StandardView;
+        let mut h = Harness::new();
+        h.app.preferences.look_at_anim = false;
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        h.frames(2);
+        let looks_from = |h: &mut Harness, digit: &str, view: StandardView| {
+            // Start from somewhere else, so the key has to move the view.
+            h.step(&json!({"key": "ArrowLeft"})).unwrap();
+            h.frames(2);
+            h.step(&json!({"key": digit, "cmd": true})).unwrap();
+            h.frames(2);
+            let mut want = h.app.cam;
+            want.set_view(view);
+            (h.app.cam.back() - want.back()).len() < 1e-6
+        };
+        for (digit, view) in [
+            ("1", StandardView::Front),
+            ("2", StandardView::Back),
+            ("3", StandardView::Left),
+            ("4", StandardView::Right),
+            ("5", StandardView::Top),
+            ("6", StandardView::Bottom),
+            ("7", StandardView::Iso),
+        ] {
+            assert!(looks_from(&mut h, digit, view), "Ctrl+{digit} turns to {view:?}: {:?}", h.app.cam.back());
+        }
+        // Top moves to Ctrl+T; Ctrl+5 then does nothing, Ctrl+T turns to the top.
+        crate::keymap::bind(&mut h.app, "view.top", "Ctrl+T", false).unwrap();
+        assert!(!looks_from(&mut h, "5", StandardView::Top), "Ctrl+5 no longer turns to the top");
+        assert!(looks_from(&mut h, "T", StandardView::Top), "Ctrl+T does");
     }
 
     /// #1886: Ctrl+8 looks straight at the sketch; pressed again while the view faces it, it

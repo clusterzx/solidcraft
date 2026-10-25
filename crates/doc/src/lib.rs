@@ -43,6 +43,7 @@ mod name_lookup;
 mod names;
 pub mod naming;
 mod params;
+pub mod persistent_name;
 pub mod physical_material;
 mod piece_names;
 pub mod pipe_thread_catalog;
@@ -100,6 +101,8 @@ pub enum DocError {
 
 pub type Result<T> = std::result::Result<T, DocError>;
 
+#[cfg(test)]
+mod coil_tests;
 #[cfg(test)]
 mod feature_walk_tests;
 #[cfg(test)]
