@@ -1111,7 +1111,7 @@ mod tests {
         let mut h = crate::scenario::Harness::new();
         h.app.home.open = false;
         h.app.session = solidcraft_engine::Session::new(doc);
-        h.app.ui.show_origin = false;
+        h.app.set_origin_shown(false);
         h
     }
 

@@ -339,8 +339,11 @@ fn visibility(s: &mut Session, p: &Value) -> Result<Value> {
         s.visibility.hidden_folders.retain(|k| !k.ends_with(&own) && !groups.iter().any(|g| k.ends_with(g.as_str())));
     }
     let v = &mut s.visibility;
-    if visible && str_(p, "folder") == Some("bodies") {
-        v.hidden_occurrences.clear();
+    match str_(p, "folder") {
+        Some("bodies") if visible => v.hidden_occurrences.clear(),
+        // Showing a whole folder shows the folder too.
+        Some("origin") if visible => v.origin_hidden = Some(false),
+        _ => {}
     }
     for it in &items {
         match it {
@@ -675,7 +678,8 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, e));
     }
     d.rename_body_keys(&old, name);
-    for b in s.visibility.hidden_bodies.iter_mut().filter(|b| **b == old) {
+    let v = &mut s.visibility;
+    for b in v.hidden_bodies.iter_mut().chain(v.locked_bodies.iter_mut()).filter(|b| **b == old) {
         *b = name.to_string();
     }
     Ok(json!({"body": old, "name": name}))
@@ -1172,10 +1176,12 @@ mod tests {
         // The browser's Sketches folder hidden: sketches shown one by one aren't drawn either,
         // only the sketch being edited.
         assert!(s.visibility.shown_sketches.contains(&floor));
-        assert!([floor, drain].iter().all(|id| !crate::view::sketch_drawn(&s, *id, false)));
+        run(&mut s, "browser.visibility", json!({"tree_folders": ["c0/sketches"], "visible": false}));
+        assert!([floor, drain].iter().all(|id| !crate::view::sketch_shown(&s, *id)));
         s.active_sketch = Some(floor);
-        assert!(crate::view::sketch_drawn(&s, floor, false) && !crate::view::sketch_drawn(&s, drain, false));
+        assert!(crate::view::sketch_shown(&s, floor) && !crate::view::sketch_shown(&s, drain));
         s.active_sketch = None;
+        run(&mut s, "browser.visibility", json!({"tree_folders": ["c0/sketches"], "visible": true}));
         // Bodies (following a rename) and construction planes.
         run(&mut s, "browser.visibility", json!({"items": [body.clone(), "Floor", "xy"], "visible": false}));
         assert!(crate::view::scene(&s, &cam).meshes.is_empty());
@@ -1238,6 +1244,43 @@ mod tests {
         let second = run(&mut s, "browser.group", params)["group"].as_u64().unwrap();
         assert!(second > first, "deleted group {first} was reused as {second}");
         assert!(s.execute("browser.rename_group", &json!({"group": first, "name": "Stale reference"})).is_err());
+    }
+
+    #[test]
+    fn the_browsers_view_is_saved_with_the_design() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10}));
+        let sketch = run(&mut s, "sketch.create", json!({"plane": "XY"}))["sketch"].as_u64().unwrap();
+        run(&mut s, "sketch.rectangle.two_point", json!({"p0": [20, 0], "p1": [30, 10]}));
+        run(&mut s, "sketch.finish", json!({}));
+        let body = names(&s)[0].clone();
+        s.mark_saved();
+        let undo = s.undo.len();
+        assert!(crate::view::sketch_shown(&s, sketch));
+        // The folders' eyes, a sketch's profiles and dimensions and a lock: view state to save.
+        let v = &mut s.visibility;
+        v.origin_hidden = Some(true);
+        v.hidden_folders.push("c0/sketches".into());
+        v.hidden_profiles.push(sketch);
+        v.shown_dimensions.push(sketch);
+        v.locked_bodies.push(body.clone());
+        assert!(s.is_dirty() && s.undo.len() == undo, "a change to save, not an undo step");
+        assert!(!crate::view::sketch_shown(&s, sketch), "the hidden Sketches folder hides an unused sketch");
+        run(&mut s, "body.rename", json!({"body": body, "name": "Locked"}));
+        assert_eq!(s.visibility.locked_bodies, vec!["Locked".to_string()]);
+        // Saved and opened again, the design brings all of it back, with nothing to save.
+        let text = s.design().to_json();
+        let opened = Session::new(solidcraft_doc::Document::from_json(&text).unwrap());
+        assert_eq!(opened.visibility, s.visibility);
+        assert!(!opened.is_dirty());
+        assert!(!crate::view::sketch_shown(&opened, sketch));
+        // Showing a whole folder shows the folder itself.
+        run(&mut s, "browser.visibility", json!({"folder": "origin", "visible": true}));
+        run(&mut s, "browser.visibility", json!({"folder": "sketches", "visible": true}));
+        assert_eq!((s.visibility.origin_hidden, s.visibility.hidden_folders.is_empty()), (Some(false), true));
+        // A design that never touched the Origin's eye leaves it to the app.
+        let plain = solidcraft_doc::Document::from_json(&Session::default().design().to_json()).unwrap();
+        assert!(plain.visibility.is_empty() && plain.visibility.origin_hidden.is_none());
     }
 
     #[test]

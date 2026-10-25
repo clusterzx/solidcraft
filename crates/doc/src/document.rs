@@ -2452,7 +2452,7 @@ pub struct DesignLink {
 /// The document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
-    /// Named, renderer-independent setups. Device/job state is never saved here.
+    /// Named image intent and immutable embedded HDR sources. Active jobs and device state are not saved.
     #[serde(default, skip_serializing_if = "crate::render_settings::RenderSettings::is_empty")]
     pub render: std::sync::Arc<crate::render_settings::RenderSettings>,
     #[serde(default = "default_format")]
@@ -2549,7 +2549,8 @@ pub struct Document {
     pub visibility: Visibility,
 }
 
-/// Items hidden or shown one by one. Saved with the design, but not an undo step.
+/// The browser's view of a design: items and folders hidden or shown, sketch profiles and
+/// dimensions shown, bodies locked. Saved with the design, but not an undo step.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Visibility {
@@ -2566,6 +2567,18 @@ pub struct Visibility {
     /// Assembly joints by id: their glyphs are not drawn (they still constrain and move).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_joints: Vec<u64>,
+    /// The browser's Origin folder is hidden (`None`: the app's preference decides).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_hidden: Option<bool>,
+    /// Finished sketches whose closed profiles are not shaded, by feature id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_profiles: Vec<u64>,
+    /// Finished sketches whose dimensions are shown, by feature id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shown_dimensions: Vec<u64>,
+    /// Bodies locked in the browser (no move or delete), by name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub locked_bodies: Vec<String>,
     /// Browser folders and groups hidden themselves, by tree key: `<scope>/<folder>` or
     /// `<scope>/g<group id>`, where the scope is `c0` (the design) or `o:<placement path>`
     /// (`o:4/9/bodies`). Their items keep their own state: they are drawn again, as they were,
@@ -2583,6 +2596,10 @@ impl Visibility {
             && self.hidden_sketches.is_empty()
             && self.shown_sketches.is_empty()
             && self.hidden_joints.is_empty()
+            && self.origin_hidden.is_none()
+            && self.hidden_profiles.is_empty()
+            && self.shown_dimensions.is_empty()
+            && self.locked_bodies.is_empty()
             && self.hidden_folders.is_empty()
     }
 }
@@ -3060,6 +3077,7 @@ impl Document {
 
     /// Read a design file's JSON (any format this build knows; older ones are upgraded).
     pub fn from_json(s: &str) -> Result<Document> {
+        crate::render_resources::check_json_budget(s)?;
         let d = crate::format::read(s)?;
         if d.features.len() > MAX_FEATURES || d.params.len() > MAX_PARAMS {
             return Err(DocError::Invalid("document too large".into()));
@@ -3709,7 +3727,13 @@ pub struct UserMaterial {
     pub density: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<crate::appearance::Look>,
+    /// Candidate engineering data; independent of assigned mass density and optics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_card: Option<crate::physical_material::ValidatedCard>,
 }
+
+/// Bound design-owned definitions consistently in commands and normal file loading.
+pub const MAX_USER_MATERIALS: usize = 1000;
 
 /// Largest density a material may have (g/cm³); the densest elements are about 22.6.
 pub const MAX_DENSITY: f64 = 1000.0;

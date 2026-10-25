@@ -190,11 +190,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
         input_rows(d, ui, &app.session);
     }
     match &mut d.kind {
-        Kind::Material { index } => {
-            let names = app.session.doc.material_names();
-            let names: Vec<_> = names.iter().map(String::as_str).collect();
-            choice_row(ui, "Material", "mat", index, &names);
-        }
+        Kind::Material { index, editor } => crate::material_editor::rows(app, ui, index, editor),
         Kind::Appearance(k) => enter |= crate::dialogs_appearance::rows(app, ui, k, &mut d.inputs),
         Kind::Motion(k) => enter |= crate::dialogs_motion::rows(app, ui, k, &mut d.inputs),
         Kind::Part(k) => enter |= crate::dialogs_parts::rows(app, ui, k, &d.inputs),
@@ -574,6 +570,40 @@ fn extra_options(ui: &mut egui::Ui, id: &str, extra: &mut serde_json::Map<String
     }
 }
 
+/// The coil's section, where the section sits on the diameter, the way it turns and where it
+/// starts (#3862). A default stays out of the parameters, so OK on an unchanged edit keeps the coil.
+fn coil_rows(ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>) -> bool {
+    const POSITIONS: [(&str, &str); 3] = [("Inside", "inside"), ("Center", "center"), ("Outside", "outside")];
+    form_row(ui, "Section", |ui| extra_segments(ui, extra, "section", &[("Circular", "circular"), ("Square", "square")]));
+    form_row(ui, "Section position", |ui| {
+        let current =
+            extra.get("section_position").and_then(Value::as_str).and_then(|v| POSITIONS.iter().position(|(_, key)| *key == v)).unwrap_or(1);
+        let mut selected = current;
+        if ui_kit::segmented(ui, &mut selected, &POSITIONS.map(|(label, _)| label), Default::default()) && selected != current {
+            match POSITIONS.get(selected) {
+                Some((_, value)) if *value != "center" => {
+                    extra.insert("section_position".into(), json!(value));
+                }
+                _ => {
+                    extra.remove("section_position");
+                }
+            }
+        }
+    });
+    let mut angle = extra.get("start_angle").and_then(Value::as_str).unwrap_or_default().to_string();
+    let before = angle.clone();
+    let enter = hint_row(ui, "Start angle", &mut angle, "0 deg");
+    if angle != before {
+        if angle.trim().is_empty() {
+            extra.remove("start_angle");
+        } else {
+            extra.insert("start_angle".into(), json!(angle));
+        }
+    }
+    extra_options(ui, "coil_options", extra, &[("Clockwise", "clockwise")]);
+    enter
+}
+
 fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> bool {
     let mut enter = false;
     match &mut d.kind {
@@ -656,7 +686,7 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         Kind::Construct { t: Some(t), .. } => {
             form_row(ui, "Position (0 to 1)", |ui| enter |= field(ui, t));
         }
-        Kind::Split | Kind::ReplaceFace | Kind::Remove | Kind::Midplane | Kind::Construct { t: None, .. } => {}
+        Kind::Split | Kind::ReplaceFace | Kind::Remove | Kind::Midplane | Kind::ChatContext | Kind::Construct { t: None, .. } => {}
         Kind::Rib { thickness, depth, flip, normal, .. } => {
             form_row(ui, "Direction", |ui| {
                 let mut i = usize::from(*normal);
@@ -753,9 +783,12 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             enter |= crate::dialogs_move::rows(ui, k);
             extra_options(ui, "move_options", &mut d.extra, &[("Create Copy", "copy")]);
         }
-        Kind::Primitive { fields, operation, at, .. } => {
+        Kind::Primitive { cmd, fields, operation, at } => {
             for (k, v) in fields.iter_mut() {
                 enter |= expr_row(ui, k, v);
+            }
+            if *cmd == "solid.coil" {
+                enter |= coil_rows(ui, &mut d.extra);
             }
             if let Some((p, _)) = *at {
                 form_row(ui, "Position", |ui| {

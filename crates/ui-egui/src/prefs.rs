@@ -591,6 +591,8 @@ preference_settings! {
     /// hole moves the hole there (`hole_place`). Off by default: a second pick on its face takes
     /// the hole out, and a hole is moved by taking it out and picking again.
     hole_moves: bool = false, PAGE_DESIGN => check("Move holes by clicking or dragging");
+    /// The browser's Origin folder starts hidden in designs that don't keep its eye themselves.
+    hide_origin: bool = false, PAGE_DESIGN => check_tr("ui.hide_origin_by_default");
     /// What a middle-button double-click in the view does: `home`, `fit` or `off`.
     middle_double_click: String = "home".into(), PAGE_NAVIGATION;
     /// Colour vision mode (#778): `off`, `protan`, `deutan` or `tritan`.

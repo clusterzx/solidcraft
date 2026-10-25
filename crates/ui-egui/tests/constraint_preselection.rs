@@ -11,9 +11,10 @@ fn lines() -> Harness {
 }
 
 fn select_lines(h: &mut Harness) {
+    // These tests select whole edges; the exact centre is now a selectable MID.
     h.run(&json!([
-        {"click":{"sketch":[25,10]}},
-        {"click":{"sketch":[25,32.5]},"shift":true}
+        {"click":{"sketch":[17.5,10]}},
+        {"click":{"sketch":[17.5,31.25]},"shift":true}
     ]))
     .unwrap();
     assert_eq!(h.app.session.selection, vec![Sel::SketchCurve { id: "l1".into() }, Sel::SketchCurve { id: "l2".into() }]);
@@ -183,16 +184,16 @@ fn curvature_polygon_and_fix_consume_clicked_operands_atomically() {
             "curvature" => {
                 h.app.run("sketch.line", json!({"points":[[10,10],[30,10]],"infer":false})).unwrap();
                 h.app.run("sketch.spline.control_point", json!({"points":["l1.end",[40,12],[50,16],[60,25]]})).unwrap();
-                vec![[20., 10.], [45., 14.875]]
+                vec![[15., 10.], [45., 14.875]]
             }
             "polygon" => {
                 h.app.run("sketch.line", json!({"points":[[10,10],[40,10],[40,30],[10,30]],"closed":true,"infer":false})).unwrap();
-                vec![[25., 10.], [40., 20.], [25., 30.], [10., 20.]]
+                vec![[17.5, 10.], [40., 15.], [32.5, 30.], [10., 25.]]
             }
             _ => {
                 h.app.run("sketch.line", json!({"points":[[10,10],[40,10]],"infer":false})).unwrap();
                 h.app.run("sketch.point", json!({"point":[20,25],"id":"p"})).unwrap();
-                vec![[25., 10.], [20., 25.]]
+                vec![[17.5, 10.], [20., 25.]]
             }
         };
         h.call("ui.view", json!({"view":"top"}));

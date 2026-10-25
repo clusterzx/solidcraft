@@ -140,7 +140,7 @@ impl OccMove {
 // ---------------------------------------------------------------------------------------------
 
 /// Is a sketch shown itself (its eye)? A hidden Sketches folder or component still keeps it out
-/// of the viewport (`solidcraft_engine::view::sketch_drawn`).
+/// of the viewport (`solidcraft_engine::view::sketch_shown`).
 pub fn sketch_visible(app: &SolveApp, id: u64) -> bool {
     if app.session.visibility.hidden_sketches.contains(&id) {
         return false;
@@ -620,10 +620,12 @@ impl Lit {
                 Sel::Profile { sketch, .. } | Sel::ExternalSketchCurve { sketch, .. } | Sel::ExternalSketchPoint { sketch, .. } => {
                     Thing::Sketch(*sketch)
                 }
-                Sel::SketchCurve { .. } | Sel::SketchPoint { .. } | Sel::SketchConstraint { .. } => match app.session.active_sketch {
-                    Some(id) => Thing::Sketch(id),
-                    None => continue,
-                },
+                Sel::SketchCurve { .. } | Sel::SketchPoint { .. } | Sel::SketchMidpoint { .. } | Sel::SketchConstraint { .. } => {
+                    match app.session.active_sketch {
+                        Some(id) => Thing::Sketch(id),
+                        None => continue,
+                    }
+                }
                 Sel::Plane { name } => Thing::Plane(name.clone()),
                 Sel::Axis { name } => Thing::Axis(name.clone()),
                 Sel::Occurrence { .. } => continue,
@@ -631,7 +633,9 @@ impl Lit {
         }
         let hovered = match &app.viewport.hover {
             Some(Hit::Face { body, .. } | Hit::Edge { body, .. } | Hit::Vertex { body, .. }) => Some(Thing::Body(body.clone())),
-            Some(Hit::SketchPoint { sketch, .. } | Hit::SketchCurve { sketch, .. } | Hit::Profile { sketch, .. }) => Some(Thing::Sketch(*sketch)),
+            Some(
+                Hit::SketchPoint { sketch, .. } | Hit::SketchMidpoint { sketch, .. } | Hit::SketchCurve { sketch, .. } | Hit::Profile { sketch, .. },
+            ) => Some(Thing::Sketch(*sketch)),
             Some(Hit::Plane { name, .. }) => Some(Thing::Plane(name.clone())),
             Some(Hit::Axis { name }) => Some(Thing::Axis(name.clone())),
             None => None,
@@ -844,6 +848,9 @@ fn browser_contents(app: &mut SolveApp, ui: &mut egui::Ui, acts: &mut Actions, c
             app.tree.panel_collapsed && !(app.ui.show_timeline && app.preferences.timeline_left)
         })
     {
+        return;
+    }
+    if crate::render_workspace::browser_mode(app, ui) {
         return;
     }
     t.secondary_hline(ui.painter(), ui.max_rect().x_range(), ui.cursor().top() + 1.0, t.toolbar.lerp_to_gamma(t.border, 0.5));
@@ -1296,10 +1303,10 @@ fn origin_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &Actio
         &Row {
             depth,
             fold: Some(open),
-            eye: Some(app.ui.show_origin),
+            eye: Some(app.origin_shown()),
             icon: "origin",
             label: "Origin",
-            dim: !app.ui.show_origin,
+            dim: !app.origin_shown(),
             mark: if items.iter().any(|(_, _, thing)| lit(thing) != (false, false)) { Mark::Branch } else { Mark::None },
             ..Default::default()
         },
@@ -1308,7 +1315,7 @@ fn origin_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &Actio
         toggle(app, key, false);
     }
     if r.eye {
-        app.ui.show_origin = !app.ui.show_origin;
+        app.set_origin_shown(!app.origin_shown());
     }
     if let Some(p) = r.secondary {
         crate::context_menu::open_for(app, p, Target::Origin);
@@ -1329,7 +1336,7 @@ fn origin_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &Actio
             ui,
             ui.id().with(("o", k)),
             // Faded when hidden itself or with the whole Origin.
-            &Row { depth: depth + 1, eye: Some(visible), icon, label, selected, dim: !visible || !app.ui.show_origin, mark, ..Default::default() },
+            &Row { depth: depth + 1, eye: Some(visible), icon, label, selected, dim: !visible || !app.origin_shown(), mark, ..Default::default() },
         );
         if r.eye {
             if visible {
@@ -1716,7 +1723,7 @@ fn entries(app: &SolveApp, comp: u64, folder: &str) -> Vec<Entry> {
                 visible: !app.session.visibility.hidden_bodies.contains(&b.name),
                 selected: sel.iter().any(|x| matches!(x, Sel::Body { name } if *name == b.name)),
                 color: None,
-                locked: app.ui.locked_bodies.contains(&b.name),
+                locked: app.session.visibility.locked_bodies.contains(&b.name),
                 sel: Some(Sel::Body { name: b.name.clone() }),
                 target: Some(Target::Body { name: b.name.clone() }),
                 bodies: vec![b.name.clone()],
@@ -2225,7 +2232,7 @@ pub fn dims_overlay(app: &SolveApp, ctx: &egui::Context) {
     use solidcraft_engine::geom::Vec2;
     use solidcraft_engine::sketch::{DimFrame, chain_centres, default_text, dim_frame, dim_layout_reaching, dim_reach};
     let Some(rect) = app.viewport.rect else { return };
-    if app.ui.shown_dims.is_empty() {
+    if app.session.visibility.shown_dimensions.is_empty() {
         return;
     }
     let tk = Tokens::get();
@@ -2233,10 +2240,11 @@ pub fn dims_overlay(app: &SolveApp, ctx: &egui::Context) {
     let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(rect);
     let st = app.session.world_state();
     for id in app
-        .ui
-        .shown_dims
+        .session
+        .visibility
+        .shown_dimensions
         .iter()
-        .filter(|id| app.session.active_sketch != Some(**id) && solidcraft_engine::view::sketch_drawn(&app.session, **id, app.ui.show_sketches))
+        .filter(|id| app.session.active_sketch != Some(**id) && solidcraft_engine::view::sketch_shown(&app.session, **id))
     {
         let Some(ss) = st.sketch(*id) else { continue };
         let sk = &ss.sketch;

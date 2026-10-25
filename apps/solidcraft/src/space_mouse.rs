@@ -241,6 +241,7 @@ struct Reading {
     device: Option<Source>,
     /// A source that is connected but has not yet shown a device behind it (spacenavd's socket answers
     /// with no mouse plugged in; its protocol has no enumeration, so the first record is the evidence).
+    #[cfg(target_os = "linux")]
     awaiting: Option<Source>,
     axes: Axes,
     /// When each of X, Y, Z, Rx, Ry and Rz last arrived. Each ages on its own: a device may send
@@ -287,6 +288,7 @@ impl Reading {
     }
 
     /// A record arrived from the source being waited on: there is a device.
+    #[cfg(target_os = "linux")]
     fn heard(&mut self) {
         if self.device.is_none() {
             self.device = self.awaiting.take();
@@ -296,6 +298,7 @@ impl Reading {
     fn new(now: Instant) -> Self {
         Self {
             device: None,
+            #[cfg(target_os = "linux")]
             awaiting: None,
             axes: Axes::default(),
             at: [now; 6],
@@ -460,12 +463,20 @@ fn connected(ctx: &Context, shared: &Mutex<Reading>, source: Source) {
         let now = Instant::now();
         let stale = now.checked_sub(STALE_AFTER).unwrap_or(now);
         // A daemon is not yet a device: it counts once a record comes from it.
-        let (device, awaiting) = if needs_evidence(source) { (None, Some(source)) } else { (Some(source), None) };
+        let waiting = needs_evidence(source);
         // A HID device reports the state of its buttons, so the first state seen is a baseline; the daemon
         // and the driver send presses and releases, which start from nothing down.
         let buttons_known = !matches!(source, Source::Hid(_));
         let generation = CONNECTIONS.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-        *reading = Reading { device, awaiting, at: [stale; 6], buttons_known, generation, ..Reading::new(now) };
+        *reading = Reading {
+            device: (!waiting).then_some(source),
+            #[cfg(target_os = "linux")]
+            awaiting: waiting.then_some(source),
+            at: [stale; 6],
+            buttons_known,
+            generation,
+            ..Reading::new(now)
+        };
     }
     ctx.request_repaint();
 }
