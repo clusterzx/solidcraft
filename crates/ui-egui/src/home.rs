@@ -273,6 +273,14 @@ fn sample_picture(i: usize) -> Option<egui::ColorImage> {
     decode_thumbnail(SAMPLE_PICTURES.get(i)?.to_vec())
 }
 
+/// A recent design's picture where there is no thread to build on (the web): only the one saved in
+/// the file. Evaluating the design would freeze the page for as long as it takes, at every launch
+/// until the design is saved again (a picture is keyed to the app version).
+#[cfg(any(target_arch = "wasm32", test))]
+fn saved_picture_only(key: &str) -> Made {
+    (key.to_string(), picture(key), None)
+}
+
 /// Build what a key stands for (runs off the UI thread where threads exist).
 fn make(key: &str) -> Made {
     let sample = key.strip_prefix("sample:").and_then(|i| i.parse::<usize>().ok());
@@ -429,7 +437,7 @@ fn poll(app: &mut SolveApp, ctx: &egui::Context) {
         ctx.request_repaint();
     } else if !app.home.queued.is_empty() {
         let key = app.home.queued.remove(0);
-        done.push(make(&key));
+        done.push(saved_picture_only(&key));
         ctx.request_repaint();
     }
     for (key, img, session) in done {
@@ -1175,6 +1183,31 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         assert!(decode_thumbnail(vec![0; 600_000]).is_none());
         assert!(decode_thumbnail(vec![0; 24]).is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn browser_home_shows_saved_pictures_and_never_builds_a_recent_design() {
+        // The web app's renderer: a recent design could be built and drawn, but not off the page's thread.
+        crate::gpu::install_cpu_picture_renderer();
+        let mut session = Session::default();
+        session.execute("solid.box", &serde_json::json!({"length":10,"width":20,"height":30})).unwrap();
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("solidcraft-web-recent-{}-{nonce}.solidcraft", std::process::id()));
+        let key = path.to_string_lossy().into_owned();
+        // No picture in the file (saved without one, or by another app version).
+        std::fs::write(&path, session.design_container(solidcraft_engine::io::DesignCompression::Fast, false, false).unwrap()).unwrap();
+        let (made_key, image, rebuilt) = saved_picture_only(&key);
+        assert_eq!(made_key, key);
+        assert!(image.is_none() && rebuilt.is_none(), "the placeholder stays: nothing is built");
+        assert!(!cache_path(&key).unwrap().exists());
+        // A picture saved in the file shows.
+        for body in &session.world_state().bodies {
+            body.mesh();
+        }
+        std::fs::write(&path, session.design_container(solidcraft_engine::io::DesignCompression::Fast, false, true).unwrap()).unwrap();
+        assert_eq!(saved_picture_only(&key).1.unwrap().size, THUMB);
+        std::fs::remove_file(path).unwrap();
     }
 
     /// STEP opens deliberately have no save path, but their source still gets a cache entry.
