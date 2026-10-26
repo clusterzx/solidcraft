@@ -20,6 +20,7 @@ bundled-render-library = ["solidcraft-engine/bundled-render-library"]
 [dependencies]
 solidcraft-engine = { workspace = true }
 solidcraft-ui-egui = { workspace = true }
+solidcraft-thread = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
 url = "2"

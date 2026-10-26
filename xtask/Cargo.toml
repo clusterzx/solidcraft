@@ -10,3 +10,5 @@ proc-macro2 = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 syn = { workspace = true, features = ["visit"] }
+# Making the waits of the web build with threads safe on the page's thread (web_threads.rs).
+walrus = "0.27"

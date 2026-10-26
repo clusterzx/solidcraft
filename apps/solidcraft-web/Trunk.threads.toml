@@ -1,0 +1,6 @@
+# The web app's build with threads (`cargo xtask web-threads`, docs/web-threads.md). No hooks:
+# only its module is kept, beside the site's own, and the site's service worker is written after.
+[build]
+target = "threads.html"
+public_url = "./"
+filehash = true

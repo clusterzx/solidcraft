@@ -366,11 +366,14 @@ fn job_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> u64 {
     h.finish()
 }
 
-/// Start computing the preview of `cmds`: for a tool feature (`tool`), only its tool.
-#[cfg(not(target_arch = "wasm32"))]
+/// Start computing the preview of `cmds`: for a tool feature (`tool`), only its tool. Where no
+/// thread starts (the browser build without threads, every worker busy) it is computed now.
 fn spawn(pv: &mut PreviewState, key: u64, scratch: Session, cmds: Vec<(String, Value)>, colors: Colors, tool: bool) {
     let (tx, rx) = std::sync::mpsc::channel();
-    let spawned = std::thread::Builder::new().name("preview".into()).spawn(move || {
+    let job = std::sync::Arc::new(std::sync::Mutex::new(Some((scratch, cmds))));
+    let taken = job.clone();
+    let spawned = solidcraft_thread::Builder::new().name("preview").spawn(move || {
+        let Some((scratch, cmds)) = taken.lock().ok().and_then(|mut j| j.take()) else { return };
         let _ = tx.send(if tool { compute_tool(&scratch, &cmds, colors) } else { compute(&scratch, &cmds, colors) });
     });
     match spawned {
@@ -378,14 +381,11 @@ fn spawn(pv: &mut PreviewState, key: u64, scratch: Session, cmds: Vec<(String, V
             pv.running = Some((key, rx));
             pv.running_tool = tool;
         }
-        Err(e) => pv.apply(key, Err(e.to_string())),
+        Err(_) => {
+            let Some((scratch, cmds)) = job.lock().ok().and_then(|mut j| j.take()) else { return };
+            pv.apply(key, if tool { compute_tool(&scratch, &cmds, colors) } else { compute(&scratch, &cmds, colors) });
+        }
     }
-}
-
-/// No threads on the web: compute right away.
-#[cfg(target_arch = "wasm32")]
-fn spawn(pv: &mut PreviewState, key: u64, scratch: Session, cmds: Vec<(String, Value)>, colors: Colors, tool: bool) {
-    pv.apply(key, if tool { compute_tool(&scratch, &cmds, colors) } else { compute(&scratch, &cmds, colors) });
 }
 
 /// Evaluate the commands on the scratch session and build the preview scene.

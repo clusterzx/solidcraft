@@ -772,9 +772,23 @@ mod web {
                         }};
                         // Thumbnails of saves and start-page cards.
                         solidcraft_ui_egui::gpu::install_cpu_picture_renderer();
+                        // Threads where this is the build with them and the page can run it
+                        // (docs/web-threads.md): the loader says where the module's glue is.
+                        let glue = js_sys::Reflect::get(&js_sys::global(), &"solidcraftGlue".into()).ok().and_then(|g| g.as_string());
+                        let threads = solidcraft_thread::start(glue.as_deref());
+                        match &threads {
+                            Ok(()) => log::info!("threads: up to {} at once", solidcraft_thread::available_parallelism()),
+                            Err(e) => log::info!("no threads: {e}"),
+                        }
                         let (sender, receiver) = std::sync::mpsc::channel();
                         let mut app = SolveApp::new(Session::default(), services).with_control(receiver);
                         app.embedded = launch.embed;
+                        if threads.is_ok() {
+                            // What the desktop computes beside the window (a dialog's OK, the
+                            // history marker, undo, deletes' checks, an agent's commands), here
+                            // too: the page's thread can't wait, so it looks again next frame.
+                            app.apply_off_thread = Some(std::time::Duration::ZERO);
+                        }
                         if launch.persists() && let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))) {
                             app.load_prefs(&p);
                         }

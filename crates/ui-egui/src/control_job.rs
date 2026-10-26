@@ -162,14 +162,14 @@ fn label(app: &SolveApp, command: &str) -> String {
 }
 
 /// Run `f` on a worker thread (with the request's folder scope), answering on the returned
-/// channel. `None` without threads (the web).
+/// channel. `None` when no thread starts (the browser build without threads).
 fn spawn(
     scope: Option<solidcraft_engine::io::vfs::PathScope>,
     f: impl FnOnce() -> Option<Value> + Send + 'static,
 ) -> Option<Receiver<Option<Value>>> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("agent".into())
+    solidcraft_thread::Builder::new()
+        .name("agent")
         .spawn(move || {
             let r = solidcraft_engine::io::vfs::scoped(scope, f);
             let _ = tx.send(r);
@@ -288,7 +288,7 @@ fn within_wait(app: &SolveApp, rx: &Receiver<Option<Value>>) -> Option<Option<Va
     if wait.is_zero() {
         return None;
     }
-    match rx.recv_timeout(wait) {
+    match crate::within(rx, wait) {
         Ok(r) => Some(r),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Some(None),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,

@@ -189,6 +189,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
 name = "approx"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1487,6 +1493,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1714,6 +1726,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gimli"
+version = "0.32.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
+dependencies = [
+ "fallible-iterator",
+ "indexmap",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1910,6 +1933,8 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1920,6 +1945,12 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "foldhash",
 ]
+
+[[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
@@ -2097,6 +2128,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "id-arena"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2154,6 +2191,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -2347,6 +2386,18 @@ name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
+name = "leb128"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c83bff1d572d6b9aeef67ddfc8448e4a3737909cb28e81f97c791b9018703e52"
+
+[[package]]
+name = "leb128fmt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
@@ -4434,6 +4485,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcraft-thread"
+version = "0.22.1"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "solidcraft-ui-egui"
 version = "0.22.1"
 dependencies = [
@@ -4453,6 +4513,7 @@ dependencies = [
  "solidcraft-engine",
  "solidcraft-gpu",
  "solidcraft-space-mouse",
+ "solidcraft-thread",
  "syn 2.0.119",
  "tiny-skia",
  "toml",
@@ -4472,6 +4533,7 @@ dependencies = [
  "log",
  "serde_json",
  "solidcraft-engine",
+ "solidcraft-thread",
  "solidcraft-ui-egui",
  "url",
  "wasm-bindgen",
@@ -5138,6 +5200,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "walrus"
+version = "0.27.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5691aeb3546554822fe2c13d63149c26a027cd07d900a72c7c7f37f4321bfaea"
+dependencies = [
+ "anyhow",
+ "gimli",
+ "id-arena",
+ "leb128",
+ "log",
+ "walrus-macro",
+ "wasm-encoder",
+ "wasmparser",
+]
+
+[[package]]
+name = "walrus-macro"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a9b0525d7ea6e5f906aca581a172e5c91b4c595290dfa8ad4a2bc9ffef33b44"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5206,6 +5296,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-encoder"
+version = "0.245.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9dca005e69bf015e45577e415b9af8c67e8ee3c0e38b5b0add5aa92581ed5c"
+dependencies = [
+ "leb128fmt",
+ "wasmparser",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.245.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f08c9adee0428b7bddf3890fc27e015ac4b761cc608c822667102b8bfd6995e"
+dependencies = [
+ "bitflags 2.13.2",
+ "hashbrown 0.16.1",
+ "indexmap",
+ "semver",
+ "serde",
 ]
 
 [[package]]
@@ -6024,6 +6137,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "syn 2.0.119",
+ "walrus",
 ]
 
 [[package]]

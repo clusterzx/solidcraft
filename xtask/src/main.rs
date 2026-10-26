@@ -20,6 +20,7 @@ mod ui_containers;
 mod web_mcp_test;
 mod web_offline;
 mod web_offline_test;
+mod web_threads;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -70,6 +71,10 @@ commands:
   web-offline [DIR]
                   write the web build's service worker (sw.js: offline use, updates); run by
                   Trunk after release builds of apps/solidcraft-web, or on a built site in DIR
+  web-threads [DIR] [--from SITE]
+                  add the web app's build with threads to a built site (default dist/web): browsers
+                  on a cross-origin isolated page load it (docs/web-threads.md); --from takes an
+                  already built one (trunk's output with Trunk.threads.toml)
   web-api-test [--site DIR]  Test the command API in a real browser build (default: dist/web)
   web-mcp-test [--site DIR] [--relay PATH] [--out DIR] [--url http://HOST:PORT/ --token TOKEN]
                   an agent drives a real browser tab through solidcraft-relay (MCP over HTTP):
@@ -110,6 +115,7 @@ fn main() -> ExitCode {
         Some("ci") => cmd_ci(),
         Some("wasm") => cmd_wasm(),
         Some("web-offline") => web_offline::run(&root(), rest.first().copied()),
+        Some("web-threads") => web_threads::run(&root(), &rest),
         Some("web-offline-test") => {
             let site = rest.iter().position(|a| *a == "--site").and_then(|i| rest.get(i + 1)).copied();
             web_offline_test::run(&root(), site, true)

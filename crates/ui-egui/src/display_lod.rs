@@ -30,7 +30,6 @@ pub(crate) const CACHE_BYTES: usize = 768 << 20;
 /// A body smaller than this on screen (its box's longer side, physical pixels) is not refined.
 pub(crate) const MIN_PX: f64 = 32.0;
 /// Refinements planned at once, off the UI thread.
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_JOBS: usize = 2;
 
 /// A refined plan and its CPU mesh (none: the body has no plan at that step).
@@ -131,7 +130,6 @@ struct Entry {
     used: u64,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct Job {
     key: (usize, DisplayQuality, u8),
     holder: Holder,
@@ -163,10 +161,9 @@ pub(crate) struct Lod {
     /// The step each body is drawn at, by [`body_id`] (absent: 0, the chosen level).
     shown: HashMap<usize, u8>,
     cache: HashMap<(usize, DisplayQuality, u8), Entry>,
-    #[cfg(not(target_arch = "wasm32"))]
     jobs: Vec<Job>,
-    /// The web plans one refinement per frame: more are waiting.
-    #[cfg(target_arch = "wasm32")]
+    /// Without threads (the browser build without them) one refinement is planned per frame:
+    /// more are waiting.
     more: bool,
     /// Bumped whenever a body's drawn step changes (part of the scene's key).
     pub generation: u64,
@@ -261,14 +258,7 @@ impl Lod {
 
     /// Whether refinements are still being planned (the viewport repaints to collect them).
     pub fn busy(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            !self.jobs.is_empty()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.more
-        }
+        !self.jobs.is_empty() || self.more
     }
 
     fn insert(&mut self, key: (usize, DisplayQuality, u8), holder: Holder, refined: Refined) {
@@ -276,9 +266,8 @@ impl Lod {
         self.cache.insert(key, Entry { _holder: holder, refined, bytes, used: self.clock });
     }
 
-    /// Collect finished refinements; whether any finished. They are swapped in by the next
-    /// choice of steps ([`Lod::update`]).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Collect finished refinements; whether any finished (or, without threads, more are
+    /// waiting). They are swapped in by the next choice of steps ([`Lod::update`]).
     pub fn collect(&mut self) -> bool {
         let mut done = Vec::new();
         self.jobs.retain(|j| match j.rx.try_recv() {
@@ -296,19 +285,24 @@ impl Lod {
         for (key, holder, r) in done {
             self.insert(key, holder, r);
         }
-        any
+        any || self.more
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub fn collect(&mut self) -> bool {
-        self.more
-    }
-
-    /// Plan the requested steps: off the UI thread, a few at a time, the most needed first (the
-    /// web has no threads: one per frame, right away).
+    /// Plan the requested steps: off the UI thread, a few at a time, the most needed first
+    /// (without threads: one per frame, right away).
     fn start(&mut self, q: DisplayQuality, candidates: &[Candidate<'_>], mut requests: Vec<(usize, u8)>) {
         requests.sort_by(|a, b| candidates[b.0].err_px.total_cmp(&candidates[a.0].err_px));
-        #[cfg(not(target_arch = "wasm32"))]
+        self.more = false;
+        if !solidcraft_thread::available() {
+            self.more = requests.len() > 1;
+            if let Some((i, k)) = requests.into_iter().next() {
+                let body = candidates[i].body;
+                let (id, holder) = body_id(body);
+                let r = body.refined_display(q, k);
+                self.insert((id, q, k), holder, r);
+            }
+            return;
+        }
         for (i, k) in requests {
             if self.jobs.len() >= MAX_JOBS {
                 break;
@@ -320,8 +314,8 @@ impl Lod {
                 continue;
             }
             let (tx, rx) = std::sync::mpsc::channel();
-            let spawned = std::thread::Builder::new().name("display-refine".into()).spawn(move || {
-                let t0 = std::time::Instant::now();
+            let spawned = solidcraft_thread::Builder::new().name("display-refine").spawn(move || {
+                let t0 = web_time::Instant::now();
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body.refined_display(q, k))).ok().flatten();
                 log::debug!("refined {} {k} steps in {:.1} ms", body.name, t0.elapsed().as_secs_f64() * 1e3);
                 PLANNING_US.fetch_add(t0.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -330,21 +324,13 @@ impl Lod {
             match spawned {
                 Ok(_) => self.jobs.push(Job { key, holder, rx }),
                 Err(e) => {
-                    log::warn!("display refinement: {e}");
+                    // Every browser worker busy: again next frame.
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        log::warn!("display refinement: {e}");
+                    }
                     break;
                 }
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.more = requests.len() > 1;
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Some((i, k)) = requests.into_iter().next() {
-            let body = candidates[i].body;
-            let (id, holder) = body_id(body);
-            let r = body.refined_display(q, k);
-            self.insert((id, q, k), holder, r);
         }
     }
 
@@ -373,10 +359,7 @@ impl Lod {
         self.stats.refined_triangles = drawn.iter().filter_map(|e| e.refined.as_ref()).map(|(_, m)| m.triangles.len()).sum();
         self.stats.cached = self.cache.len();
         self.stats.cache_bytes = self.cache.values().map(|e| e.bytes).sum();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.stats.planning = self.jobs.len();
-        }
+        self.stats.planning = self.jobs.len();
         self.stats.planning_ms = PLANNING_US.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e3;
         self.stats.planned = self.cache.len();
     }
@@ -504,7 +487,6 @@ mod tests {
         assert_ne!(body_id(&a).0, body_id(&b).0);
         lod.update(q, cands, &live);
         assert_eq!(lod.stats.planning, 1, "one refinement fits the budget");
-        #[cfg(not(target_arch = "wasm32"))]
         assert_eq!(lod.jobs[0].key.0, body_id(&b).0, "the larger error first");
     }
 }

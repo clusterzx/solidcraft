@@ -48,7 +48,8 @@ jobs:
   image:
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The site is built twice: without and with threads (docs/web-threads.md).
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: write
@@ -57,6 +58,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          # The build with threads compiles its own standard library.
+          components: rust-src
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: docker-web
@@ -69,6 +72,8 @@ jobs:
       - name: Build the web app
         working-directory: apps/solidcraft-web
         run: trunk build --release
+      - name: Add the build with threads
+        run: cargo xtask web-threads dist/web
       - name: Image name
         id: image
         # Registry names are lower case; a fork's owner may not be.

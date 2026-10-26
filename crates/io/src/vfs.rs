@@ -59,14 +59,22 @@ mod imp {
 
 #[cfg(target_arch = "wasm32")]
 mod imp {
-    use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::sync::{Mutex, MutexGuard, PoisonError};
 
     use super::*;
 
-    thread_local! {
-        static FILES: RefCell<BTreeMap<String, Vec<u8>>> = const { RefCell::new(BTreeMap::new()) };
-        static WRITES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The files and the paths written since [`take_writes`]: one store for the page and its
+    /// workers (the browser build with threads computes on workers too).
+    struct Store {
+        files: BTreeMap<String, Vec<u8>>,
+        writes: Vec<String>,
+    }
+
+    static STORE: Mutex<Store> = Mutex::new(Store { files: BTreeMap::new(), writes: Vec::new() });
+
+    fn store() -> MutexGuard<'static, Store> {
+        STORE.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn missing(path: &str) -> Error {
@@ -75,43 +83,43 @@ mod imp {
 
     /// At most `max` bytes, to match the native signature.
     pub fn read(path: &str, max: usize) -> Result<Vec<u8>> {
-        let bytes = FILES.with(|f| f.borrow().get(path).cloned()).ok_or_else(|| missing(path))?;
+        let s = store();
+        let bytes = s.files.get(path).ok_or_else(|| missing(path))?;
         if bytes.len() > max {
             return Err(Error::new(ErrorKind::InvalidData, "file too large"));
         }
-        Ok(bytes)
+        Ok(bytes.clone())
     }
     pub fn write(path: &str, bytes: &[u8]) -> Result<()> {
-        FILES.with(|f| f.borrow_mut().insert(path.to_string(), bytes.to_vec()));
-        WRITES.with(|w| {
-            let mut w = w.borrow_mut();
-            w.retain(|p| p != path);
-            w.push(path.to_string());
-        });
+        let mut s = store();
+        s.files.insert(path.to_string(), bytes.to_vec());
+        s.writes.retain(|p| p != path);
+        s.writes.push(path.to_string());
         Ok(())
     }
     pub fn len(path: &str) -> Result<u64> {
-        FILES.with(|f| f.borrow().get(path).map(|b| b.len() as u64)).ok_or_else(|| missing(path))
+        store().files.get(path).map(|b| b.len() as u64).ok_or_else(|| missing(path))
     }
     pub fn exists(path: &str) -> bool {
-        FILES.with(|f| f.borrow().contains_key(path))
+        store().files.contains_key(path)
     }
     pub fn remove(path: &str) -> Result<()> {
-        FILES.with(|f| f.borrow_mut().remove(path)).map(|_| ()).ok_or_else(|| missing(path))
+        store().files.remove(path).map(|_| ()).ok_or_else(|| missing(path))
     }
     /// Files are keyed by their whole path here: a folder needs no making.
     pub fn create_dir_all(_path: &str) -> Result<()> {
         Ok(())
     }
     pub fn insert(path: &str, bytes: Vec<u8>) {
-        FILES.with(|f| f.borrow_mut().insert(path.to_string(), bytes));
+        store().files.insert(path.to_string(), bytes);
     }
     pub fn take_writes() -> Vec<(String, Vec<u8>)> {
-        let paths = WRITES.with(|w| std::mem::take(&mut *w.borrow_mut()));
-        paths.into_iter().filter_map(|p| FILES.with(|f| f.borrow().get(&p).cloned()).map(|b| (p, b))).collect()
+        let mut s = store();
+        let paths = std::mem::take(&mut s.writes);
+        paths.into_iter().filter_map(|p| s.files.get(&p).cloned().map(|b| (p, b))).collect()
     }
     pub fn list(prefix: &str) -> Vec<(String, u64)> {
-        FILES.with(|f| f.borrow().iter().filter(|(p, _)| p.starts_with(prefix)).map(|(p, b)| (p.clone(), b.len() as u64)).collect())
+        store().files.iter().filter(|(p, _)| p.starts_with(prefix)).map(|(p, b)| (p.clone(), b.len() as u64)).collect()
     }
 }
 

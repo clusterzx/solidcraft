@@ -23,7 +23,6 @@ type Indexes = HashMap<usize, (Arc<Mesh>, Option<Arc<MeshIndex>>)>;
 
 /// Meshes up to this many triangles and edge points get their index at once (it takes well under
 /// a millisecond); larger ones on a worker.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const AT_ONCE: usize = 20_000;
 
 impl PickIndexes {
@@ -35,11 +34,10 @@ impl PickIndexes {
             return index.clone();
         }
         let size = mesh.triangles.len() + mesh.edges.iter().map(Vec::len).sum::<usize>();
-        #[cfg(not(target_arch = "wasm32"))]
         if size > AT_ONCE {
             map.insert(key, (mesh.clone(), None));
             let (indexes, source) = (self.0.clone(), mesh.clone());
-            let started = std::thread::Builder::new().name("pick-index".into()).spawn(move || {
+            let started = solidcraft_thread::Builder::new().name("pick-index").spawn(move || {
                 let index = Arc::new(MeshIndex::new(&source));
                 if let Ok(mut map) = indexes.lock()
                     && let Some(slot) = map.get_mut(&key)
@@ -51,7 +49,6 @@ impl PickIndexes {
                 return None;
             }
         }
-        let _ = size;
         let index = Arc::new(MeshIndex::new(mesh));
         map.insert(key, (mesh.clone(), Some(index.clone())));
         Some(index)
