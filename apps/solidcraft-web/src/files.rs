@@ -194,8 +194,15 @@ async fn write_file(name: &str, bytes: &[u8]) -> Result<(), String> {
     let h = file_handle(&dir, name, true).await?;
     let w: FileSystemWritableFileStream =
         JsFuture::from(h.create_writable()).await.map_err(err)?.dyn_into().map_err(|_| "no writable stream".to_string())?;
-    JsFuture::from(w.write_with_u8_array(bytes).map_err(err)?).await.map_err(err)?;
+    write_bytes(&w, bytes).await?;
     JsFuture::from(w.close()).await.map_err(err)?;
+    Ok(())
+}
+
+/// Write `bytes` to `w`. The browser takes no view of shared memory, which the build with threads
+/// gives the module (docs/web-threads.md), so they go as a copy of their own.
+pub(crate) async fn write_bytes(w: &FileSystemWritableFileStream, bytes: &[u8]) -> Result<(), String> {
+    JsFuture::from(w.write_with_js_u8_array(&Uint8Array::from(bytes)).map_err(err)?).await.map_err(err)?;
     Ok(())
 }
 
