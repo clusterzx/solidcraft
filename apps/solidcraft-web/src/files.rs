@@ -16,7 +16,9 @@ use solidcraft_engine::io::vfs;
 use crate::disk;
 use wasm_bindgen::{JsCast as _, JsValue, closure::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemGetFileOptions, FileSystemWritableFileStream};
+use web_sys::{
+    FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemGetDirectoryOptions, FileSystemGetFileOptions, FileSystemWritableFileStream,
+};
 
 /// Where OPFS files appear to the engine.
 pub const OPFS: &str = disk::OPFS_PREFIX;
@@ -184,14 +186,30 @@ async fn file_handle(dir: &FileSystemDirectoryHandle, name: &str, create: bool) 
     JsFuture::from(dir.get_file_handle_with_options(name, &opts)).await.map_err(err)?.dyn_into().map_err(|_| "not a file".to_string())
 }
 
+/// The folder `folders` (each inside the one before) in the storage, made where missing when `create`.
+async fn folder(folders: &[&str], create: bool) -> Result<FileSystemDirectoryHandle, String> {
+    let mut dir = root().await?;
+    for name in folders {
+        let opts = FileSystemGetDirectoryOptions::new();
+        opts.set_create(create);
+        dir = JsFuture::from(dir.get_directory_handle_with_options(name, &opts))
+            .await
+            .map_err(err)?
+            .dyn_into()
+            .map_err(|_| format!("{name}: not a folder"))?;
+    }
+    Ok(dir)
+}
+
 async fn write_file(name: &str, bytes: &[u8]) -> Result<(), String> {
     if local_only() {
         return local()?
             .set_item(&format!("{LOCAL_PREFIX}{name}"), &encode(bytes))
             .map_err(|e| format!("local storage is full or blocked: {}", err(e)));
     }
-    let dir = root().await?;
-    let h = file_handle(&dir, name, true).await?;
+    let (folders, file) = crate::opfs_parts(name)?;
+    let dir = folder(&folders, true).await?;
+    let h = file_handle(&dir, file, true).await?;
     let w: FileSystemWritableFileStream =
         JsFuture::from(h.create_writable()).await.map_err(err)?.dyn_into().map_err(|_| "no writable stream".to_string())?;
     write_bytes(&w, bytes).await?;
@@ -212,8 +230,9 @@ async fn remove_file(name: &str) -> Result<(), String> {
         st.remove_item(&format!("{LEGACY_LOCAL_PREFIX}{name}")).map_err(err)?;
         return st.remove_item(&format!("{LOCAL_PREFIX}{name}")).map_err(err);
     }
-    let dir = root().await?;
-    JsFuture::from(dir.remove_entry(name)).await.map_err(err)?;
+    let (folders, file) = crate::opfs_parts(name)?;
+    let dir = folder(&folders, false).await?;
+    JsFuture::from(dir.remove_entry(file)).await.map_err(err)?;
     Ok(())
 }
 
@@ -241,26 +260,47 @@ async fn read_all() -> Result<Vec<(String, Vec<u8>, f64)>, String> {
             return read_local();
         }
     };
-    let iter: JsValue = dir.values().into();
-    let next: Function = Reflect::get(&iter, &"next".into()).map_err(err)?.dyn_into().map_err(|_| "no iterator".to_string())?;
     let mut out = Vec::new();
-    for _ in 0..10_000 {
-        let step = JsFuture::from(js_sys::Promise::resolve(&next.call0(&iter).map_err(err)?)).await.map_err(err)?;
-        if Reflect::get(&step, &"done".into()).ok().and_then(|d| d.as_bool()).unwrap_or(true) {
-            break;
-        }
-        let Ok(h) = Reflect::get(&step, &"value".into()).map_err(err)?.dyn_into::<FileSystemFileHandle>() else { continue };
-        let file =
-            match JsFuture::from(h.get_file()).await.map_err(err).and_then(|f| f.dyn_into::<web_sys::File>().map_err(|_| "not a file".to_string())) {
-                Ok(f) => f,
-                Err(e) => {
-                    log::warn!("{}: {e}", h.name());
+    // Folders still to read, with the names their files are stored under (`case/`).
+    let mut folders = vec![(String::new(), dir)];
+    let mut steps = 0;
+    while let Some((prefix, dir)) = folders.pop() {
+        let iter: JsValue = dir.values().into();
+        let next: Function = Reflect::get(&iter, &"next".into()).map_err(err)?.dyn_into().map_err(|_| "no iterator".to_string())?;
+        while steps < 10_000 {
+            steps += 1;
+            let step = JsFuture::from(js_sys::Promise::resolve(&next.call0(&iter).map_err(err)?)).await.map_err(err)?;
+            if Reflect::get(&step, &"done".into()).ok().and_then(|d| d.as_bool()).unwrap_or(true) {
+                break;
+            }
+            let value = Reflect::get(&step, &"value".into()).map_err(err)?;
+            let h = match value.dyn_into::<FileSystemFileHandle>() {
+                Ok(h) => h,
+                Err(value) => {
+                    if let Ok(sub) = value.dyn_into::<FileSystemDirectoryHandle>()
+                        && prefix.matches('/').count() + 1 < crate::OPFS_MAX_DEPTH
+                    {
+                        folders.push((format!("{prefix}{}/", sub.name()), sub));
+                    }
                     continue;
                 }
             };
-        match blob_bytes(&file).await {
-            Ok(b) => out.push((h.name(), b, file.last_modified())),
-            Err(e) => log::warn!("{}: {e}", h.name()),
+            let name = format!("{prefix}{}", h.name());
+            let file = match JsFuture::from(h.get_file())
+                .await
+                .map_err(err)
+                .and_then(|f| f.dyn_into::<web_sys::File>().map_err(|_| "not a file".to_string()))
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    log::warn!("{name}: {e}");
+                    continue;
+                }
+            };
+            match blob_bytes(&file).await {
+                Ok(b) => out.push((name, b, file.last_modified())),
+                Err(e) => log::warn!("{name}: {e}"),
+            }
         }
     }
     Ok(out)
