@@ -20,6 +20,7 @@ bundled-render-library = ["solidcraft-engine/bundled-render-library"]
 [dependencies]
 solidcraft-engine = { workspace = true }
 solidcraft-ui-egui = { workspace = true }
+solidcraft-thread = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
 url = "2"
@@ -32,7 +33,8 @@ js-sys = "0.3"
 serde_json = { workspace = true }
 web-sys = { version = "0.3", features = [
     "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "Location", "Navigator", "StorageManager",
-    "FileSystemHandle", "FileSystemDirectoryHandle", "FileSystemFileHandle", "FileSystemGetFileOptions", "FileSystemWritableFileStream",
+    "FileSystemHandle", "FileSystemDirectoryHandle", "FileSystemFileHandle", "FileSystemGetDirectoryOptions", "FileSystemGetFileOptions",
+    "FileSystemWritableFileStream",
     "WritableStream", "File", "FileList", "Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement", "HtmlInputElement", "Storage",
     "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode",
     "Headers", "ReadableStream", "ReadableStreamDefaultReader",

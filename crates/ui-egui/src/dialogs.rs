@@ -542,9 +542,8 @@ fn run_evaluated(app: &mut SolveApp, d: &Dialog, evaluated: Option<&solidcraft_e
 pub const APPLY_AT_ONCE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Start OK's evaluation off the window thread, for a feature dialog. `Now` when OK should
-/// just run: not a feature, not asked for ([`SolveApp::apply_off_thread`]), no threads (the
-/// web), or done within the wait.
-#[cfg(not(target_arch = "wasm32"))]
+/// just run: not a feature, not asked for ([`SolveApp::apply_off_thread`]), no thread starts
+/// (the browser build without threads), or done within the wait.
 fn begin_applying(app: &SolveApp, d: &Dialog) -> Begun {
     let Some(wait) = app.apply_off_thread else { return Begun::Now(None) };
     if !d.previews() {
@@ -556,7 +555,7 @@ fn begin_applying(app: &SolveApp, d: &Dialog) -> Begun {
     let computed = cmds.clone();
     #[cfg(test)]
     let gate = app.apply_gate.clone();
-    let spawned = std::thread::Builder::new().name("apply".into()).spawn(move || {
+    let spawned = solidcraft_thread::Builder::new().name("apply").spawn(move || {
         let evaluated = ahead.evaluate(&computed).ok();
         #[cfg(test)]
         if let Some(gate) = gate {
@@ -567,18 +566,13 @@ fn begin_applying(app: &SolveApp, d: &Dialog) -> Begun {
     if spawned.is_err() {
         return Begun::Now(None);
     }
-    match rx.recv_timeout(wait) {
+    match crate::within(&rx, wait) {
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             Begun::Later(Applying { done: rx, evaluated: None, started: crate::now_ms(), cmds, seen: false })
         }
         Ok(evaluated) => Begun::Now(evaluated),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Begun::Now(None),
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn begin_applying(_app: &SolveApp, _d: &Dialog) -> Begun {
-    Begun::Now(None)
 }
 
 /// The commands a dialog's inputs make (or why they make none), its picks, and the design's

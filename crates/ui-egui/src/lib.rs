@@ -2160,6 +2160,19 @@ pub fn now_ms() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
 }
 
+/// What a worker sends within `wait`. A zero wait, or a thread that may not wait (the browser
+/// page's own), takes only what is in already.
+pub(crate) fn within<T>(rx: &std::sync::mpsc::Receiver<T>, wait: std::time::Duration) -> Result<T, std::sync::mpsc::RecvTimeoutError> {
+    use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
+    if wait.is_zero() || !solidcraft_thread::can_block() {
+        return rx.try_recv().map_err(|e| match e {
+            TryRecvError::Empty => RecvTimeoutError::Timeout,
+            TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
+        });
+    }
+    rx.recv_timeout(wait)
+}
+
 #[cfg(test)]
 mod picker_test_support;
 #[cfg(test)]

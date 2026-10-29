@@ -54,7 +54,7 @@ impl MeshLods {
         state.by_mesh.insert(key, (mesh.clone(), None));
         state.making += 1;
         let (shared, source) = (self.0.clone(), mesh.clone());
-        let started = std::thread::Builder::new().name("mesh-lod".into()).spawn(move || {
+        let started = solidcraft_thread::Builder::new().name("mesh-lod").spawn(move || {
             let levels = Arc::new(make(&source));
             if let Ok(mut state) = shared.lock() {
                 if let Some(slot) = state.by_mesh.get_mut(&key).filter(|(held, _)| Arc::ptr_eq(held, &source)) {
@@ -65,7 +65,7 @@ impl MeshLods {
             }
         });
         if started.is_err() {
-            // No threads (the browser): drawn in full.
+            // No thread (the browser build without threads): drawn in full.
             state.making = state.making.saturating_sub(1);
             if let Some(slot) = state.by_mesh.get_mut(&key) {
                 slot.1 = Some(Arc::new(Vec::new()));

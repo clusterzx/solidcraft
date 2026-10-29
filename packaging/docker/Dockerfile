@@ -26,16 +26,20 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
+# rust-src: the build with threads compiles its own standard library (docs/web-threads.md).
 RUN rustup target add wasm32-unknown-unknown \
+ && rustup component add rust-src \
  && curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-$(uname -m)-unknown-linux-gnu.tar.gz" \
     | tar -xz -C /usr/local/bin trunk
 WORKDIR /src
 COPY . .
 WORKDIR /src/apps/solidcraft-web
 # Trunk downloads the wasm-bindgen and wasm-opt its build needs; its post-build hook writes sw.js.
+# Then the build with threads goes beside it (docs/web-threads.md).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    trunk build --release
+    trunk build --release \
+ && cd /src && cargo xtask web-threads dist/web
 
 FROM scratch AS site
 COPY --from=build /src/dist/web/ /

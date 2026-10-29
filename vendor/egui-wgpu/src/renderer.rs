@@ -8,15 +8,16 @@ use epaint::{PaintCallbackInfo, Primitive, Vertex, emath::NumExt as _};
 use wgpu::util::DeviceExt as _;
 
 // Only implements Send + Sync on wasm32 in order to allow storing wgpu resources on the type map.
+// SolidCraft: wgpu's resources are not Send + Sync in a wasm build with threads (atomics) either.
 #[cfg(not(all(
     target_arch = "wasm32",
-    not(feature = "fragile-send-sync-non-atomic-wasm"),
+    any(not(feature = "fragile-send-sync-non-atomic-wasm"), target_feature = "atomics"),
 )))]
 /// You can use this for storage when implementing [`CallbackTrait`].
 pub type CallbackResources = type_map::concurrent::TypeMap;
 #[cfg(all(
     target_arch = "wasm32",
-    not(feature = "fragile-send-sync-non-atomic-wasm"),
+    any(not(feature = "fragile-send-sync-non-atomic-wasm"), target_feature = "atomics"),
 ))]
 /// You can use this for storage when implementing [`CallbackTrait`].
 pub type CallbackResources = type_map::TypeMap;

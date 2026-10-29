@@ -34,6 +34,13 @@ WASM="$(curl -fs "$BASE/" | grep -o 'solidcraft-web-[0-9a-f]\{8,16\}_bg\.wasm' |
 [ -n "$WASM" ] || fail "index.html names no wasm"
 [ "$(header "$BASE/$WASM" Content-Type)" = application/wasm ] || fail "$WASM is not served as application/wasm"
 header "$BASE/$WASM" Cache-Control | grep -q immutable || fail "$WASM should be cached as immutable"
+# Cross-origin isolated, so the page runs the build with threads (docs/web-threads.md).
+[ "$(header "$BASE/" Cross-Origin-Opener-Policy)" = same-origin ] || fail "index.html needs Cross-Origin-Opener-Policy: same-origin"
+[ "$(header "$BASE/" Cross-Origin-Embedder-Policy)" = require-corp ] || fail "index.html needs Cross-Origin-Embedder-Policy: require-corp"
+THREADS="$(curl -fs "$BASE/" | grep -o 'solidcraft-web-mt-[0-9a-f]\{16\}_bg\.wasm' | head -n1)"
+[ -n "$THREADS" ] || fail "index.html names no build with threads"
+[ "$(header "$BASE/$THREADS" Content-Type)" = application/wasm ] || fail "$THREADS is not served as application/wasm"
+[ "$(header "$BASE/$THREADS" Cross-Origin-Embedder-Policy)" = require-corp ] || fail "$THREADS needs Cross-Origin-Embedder-Policy"
 [ "$(header "$BASE/manifest.webmanifest" Content-Type)" = application/manifest+json ] || fail "wrong manifest type"
 code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/no-such-file")"
 [ "$code" = 404 ] || fail "a missing file answers $code, not 404"

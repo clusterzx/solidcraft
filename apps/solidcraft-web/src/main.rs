@@ -48,6 +48,23 @@ fn mcp_token_from_fragment(fragment: &str) -> Option<(String, String)> {
     token.map(|t| (t, rest.join("&")))
 }
 
+/// The folders and the file name of a stored file's name (`case/lid.solidcraft`): the browser's
+/// private storage takes one name per level, so a name with folders is kept in those folders.
+#[cfg(any(target_arch = "wasm32", test))]
+fn opfs_parts(name: &str) -> Result<(Vec<&str>, &str), String> {
+    let mut parts: Vec<&str> = name.split('/').collect();
+    let bad = |part: &&str| part.is_empty() || *part == "." || *part == ".." || part.contains(['\\', '\0']);
+    if parts.len() > OPFS_MAX_DEPTH || parts.iter().any(bad) {
+        return Err(format!("{name}: not a name the browser can store (folders separated by /, none empty, . or ..)"));
+    }
+    let file = parts.pop().ok_or_else(|| format!("{name}: no file name"))?;
+    Ok((parts, file))
+}
+
+/// How many levels deep stored files go (folders and the file).
+#[cfg(any(target_arch = "wasm32", test))]
+const OPFS_MAX_DEPTH: usize = 32;
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn query_flag(query: &str, name: &str) -> bool {
     url::form_urlencoded::parse(query.trim_start_matches('?').as_bytes()).any(|(key, _)| key == name)
@@ -772,9 +789,23 @@ mod web {
                         }};
                         // Thumbnails of saves and start-page cards.
                         solidcraft_ui_egui::gpu::install_cpu_picture_renderer();
+                        // Threads where this is the build with them and the page can run it
+                        // (docs/web-threads.md): the loader says where the module's glue is.
+                        let glue = js_sys::Reflect::get(&js_sys::global(), &"solidcraftGlue".into()).ok().and_then(|g| g.as_string());
+                        let threads = solidcraft_thread::start(glue.as_deref());
+                        match &threads {
+                            Ok(()) => log::info!("threads: up to {} at once", solidcraft_thread::available_parallelism()),
+                            Err(e) => log::info!("no threads: {e}"),
+                        }
                         let (sender, receiver) = std::sync::mpsc::channel();
                         let mut app = SolveApp::new(Session::default(), services).with_control(receiver);
                         app.embedded = launch.embed;
+                        if threads.is_ok() {
+                            // What the desktop computes beside the window (a dialog's OK, the
+                            // history marker, undo, deletes' checks, an agent's commands), here
+                            // too: the page's thread can't wait, so it looks again next frame.
+                            app.apply_off_thread = Some(std::time::Duration::ZERO);
+                        }
                         if launch.persists() && let Some(p) = cc.storage.and_then(|s| solidcraft_ui_egui::prefs::stored(|k| s.get_string(k))) {
                             app.load_prefs(&p);
                         }
@@ -865,6 +896,18 @@ mod tests {
         assert_eq!(mcp_token_from_fragment("#mcp="), Some((String::new(), String::new())));
         assert_eq!(mcp_token_from_fragment("#mcpx=1"), None);
         assert_eq!(mcp_token_from_fragment(""), None);
+    }
+
+    #[test]
+    fn a_stored_name_with_folders_is_kept_in_those_folders() {
+        assert_eq!(opfs_parts("case.solidcraft"), Ok((vec![], "case.solidcraft")));
+        assert_eq!(opfs_parts("fanttik/F2 Pro lid.solidcraft"), Ok((vec!["fanttik"], "F2 Pro lid.solidcraft")));
+        assert_eq!(opfs_parts("a/b/c.step"), Ok((vec!["a", "b"], "c.step")));
+        for bad in ["", "/case.solidcraft", "a//b.solidcraft", "a/", "../case.solidcraft", "a/./b", "a\\b.solidcraft", "a\0b"] {
+            assert!(opfs_parts(bad).is_err(), "{bad:?}");
+        }
+        assert!(opfs_parts(&format!("{}f", "a/".repeat(OPFS_MAX_DEPTH - 1))).is_ok());
+        assert!(opfs_parts(&format!("{}f", "a/".repeat(OPFS_MAX_DEPTH))).is_err());
     }
 
     #[test]

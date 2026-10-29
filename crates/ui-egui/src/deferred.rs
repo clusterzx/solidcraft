@@ -155,7 +155,6 @@ impl SolveApp {
         if self.delete_check.is_some() {
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(wait) = self.apply_off_thread
             && !self.file_load.busy()
             && self.file_picker.is_none()
@@ -163,14 +162,14 @@ impl SolveApp {
             let ahead = self.session.ahead();
             let (tx, rx) = std::sync::mpsc::channel();
             let checks = commands.clone();
-            let spawned = std::thread::Builder::new().name("delete check".into()).spawn(move || {
+            let spawned = solidcraft_thread::Builder::new().name("delete check").spawn(move || {
                 let replies = ahead.replies(&checks).into_iter().map(|r| r.map_err(|e| e.to_string())).collect();
                 let _ = tx.send(replies);
             });
             if spawned.is_ok() {
                 let check = DeleteCheck { done: rx, started: crate::now_ms(), then, revision: self.session.revision };
                 // As with the history's commands, zero always leaves it for a later frame.
-                match (wait.is_zero(), check.done.recv_timeout(wait)) {
+                match (wait.is_zero(), crate::within(&check.done, wait)) {
                     (false, Ok(replies)) => check.then.finish(self, replies),
                     _ => self.delete_check = Some(check),
                 }
@@ -226,9 +225,8 @@ impl SolveApp {
     }
 
     /// Start evaluating a command ahead. `None` when it should just run: not asked for
-    /// ([`SolveApp::apply_off_thread`]), a file operation in progress, no threads (the web), or
-    /// done within the wait.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// ([`SolveApp::apply_off_thread`]), a file operation in progress, no thread starts (the
+    /// browser build without threads), or done within the wait.
     fn begin_deferred(&self, id: &str, params: &Value) -> Start {
         let Some(wait) = self.apply_off_thread else { return Start::Now(None) };
         if self.file_load.busy() || self.file_picker.is_some() {
@@ -238,7 +236,7 @@ impl SolveApp {
         let command = (id.to_string(), params.clone());
         let commands = vec![command.clone()];
         let (tx, rx) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new().name("history".into()).spawn(move || {
+        let spawned = solidcraft_thread::Builder::new().name("history").spawn(move || {
             let _ = tx.send(ahead.evaluate(&commands).ok());
         });
         if spawned.is_err() {
@@ -247,17 +245,12 @@ impl SolveApp {
         // Zero explicitly requests off-thread application, even if a fast worker
         // finishes before this thread is scheduled again. Apply on the next frame.
         if !wait.is_zero() {
-            match rx.recv_timeout(wait) {
+            match crate::within(&rx, wait) {
                 Ok(evaluated) => return Start::Now(evaluated),
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Start::Now(None),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
         }
         Start::Later(Deferred { done: rx, evaluated: None, started: crate::now_ms(), command, revision: self.session.revision })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn begin_deferred(&self, _id: &str, _params: &Value) -> Start {
-        Start::Now(None)
     }
 }

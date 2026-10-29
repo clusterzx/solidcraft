@@ -3,8 +3,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 
 use serde_json::{Value, json};
 
@@ -19,12 +18,27 @@ pub(crate) struct Pending {
     complete: Completion,
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 struct Repaint(egui::Context);
 
-impl Wake for Repaint {
-    fn wake(self: Arc<Self>) {
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+impl std::task::Wake for Repaint {
+    fn wake(self: std::sync::Arc<Self>) {
         self.0.request_repaint();
     }
+}
+
+/// Draws the window again when the picker answers.
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+fn waker(ctx: &egui::Context) -> Waker {
+    Waker::from(std::sync::Arc::new(Repaint(ctx.clone())))
+}
+
+/// A browser build with threads can't hand the window's context to a waker (it is not Send
+/// there): the window looks at the picker again every 50 ms while one is open ([`tick`]).
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+fn waker(_ctx: &egui::Context) -> Waker {
+    Waker::noop().clone()
 }
 
 impl SolveApp {
@@ -122,7 +136,7 @@ impl SolveApp {
 
 pub(crate) fn tick(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(pending) = app.file_picker.as_mut() else { return };
-    let waker = Waker::from(Arc::new(Repaint(ctx.clone())));
+    let waker = waker(ctx);
     let Poll::Ready(path) = pending.future.as_mut().poll(&mut Context::from_waker(&waker)) else {
         // A fallback for native backends that do not wake reliably. Resizing still draws
         // the ordinary UI in every frame.

@@ -66,7 +66,7 @@ impl Meshing {
         }
         first.extend(rest);
         let job = (world.clone(), ready.clone(), done.clone(), stop.clone());
-        let spawned = std::thread::Builder::new().name("open-meshing".into()).spawn(move || {
+        let spawned = solidcraft_thread::Builder::new().name("open-meshing").spawn(move || {
             let (world, ready, done, stop) = job;
             solidcraft_engine::kernel::for_each_on_threads(&first, 16, |&i| {
                 if stop.load(Ordering::Relaxed) {
