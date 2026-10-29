@@ -150,7 +150,7 @@ fn sketch_of<'a>(
     if let Some(id) = sketch {
         return st.sketch(id);
     }
-    if let Some(ss) = s.active_sketch.and_then(|id| st.sketch(id)).filter(|ss| has(&ss.sketch)) {
+    if let Some(ss) = super::sketch_store::active(s).and_then(|id| st.sketch(id)).filter(|ss| has(&ss.sketch)) {
         return Some(ss);
     }
     st.sketches.iter().rev().map(|ss| &**ss).find(|ss| has(&ss.sketch))
@@ -342,7 +342,7 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
             let v = m.measure().volume;
             plain(Geo::Tris(tris), None, json!({"type": "body", "name": name, "closed": closed, "volume_mm3": closed.then_some(v)}))
         }
-        Sel::SketchCurve { id } => sketch_curve(sketch_of(s, &st, None, |sk| sk.curve_index(id).is_some())?, id),
+        Sel::SketchCurve { id, sketch } => sketch_curve(sketch_of(s, &st, *sketch, |sk| sk.curve_index(id).is_some())?, id),
         Sel::ExternalSketchCurve { sketch, id } => sketch_curve(sketch_of(s, &st, Some(*sketch), |_| true)?, id),
         Sel::SketchPoint { id } | Sel::ExternalSketchPoint { id, .. } => {
             let given = match sel {

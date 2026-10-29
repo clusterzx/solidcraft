@@ -6,6 +6,10 @@
 //! progress with Cancel. The overlay takes the pointer, shortcuts and commands wait, and
 //! control-channel commands that change the design are held until the file is in. A control
 //! (MCP) `doc.open` or import is answered when its file finishes loading.
+//!
+//! Update Links from the toolbar runs the same way (#5329): it reads every linked design again
+//! and rebuilds it, which takes a while in an assembly of many parts, so the overlay names the
+//! linked design being read and its rebuild's progress.
 
 use crate::ui_kit::{Container, Surface};
 use std::collections::VecDeque;
@@ -25,14 +29,17 @@ use crate::ui_kit;
 /// What a file operation does with its file.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
-    /// Open the design (or a STEP/mesh file as a new design) in a tab of its own.
+    /// Open the design (or a CAD, mesh or drawing file as a new design) in a tab of its own.
     Open,
-    /// Insert a STEP or mesh file's bodies into the active design.
+    /// Insert CAD bodies, meshes or sketch drawing geometry into the active design.
     Insert,
     /// Open a design an earlier run autosaved before it closed.
     Recover { id: String, dir: Option<String> },
     /// Export a snapshot of the current design without adopting the worker's session.
     ExportDxf,
+    /// Read the active design's linked designs again (`component.update_links`, with the
+    /// request's options: `component` reads only that link).
+    UpdateLinks,
 }
 
 pub struct Request {
@@ -46,11 +53,24 @@ pub struct Request {
     /// What that caller asked of an open or import besides its path (`up`, `names`, `matrix`,
     /// `name`, ...): the command gets them as given and checks them as it does run directly.
     pub options: serde_json::Map<String, Value>,
+    /// Network servers the user allowed for this one request ("Allow once", `network_prompt`).
+    pub allow_hosts: Vec<String>,
+    /// The saved design this request is for, when it must not run on another: one shown in its
+    /// place by the time the request starts drops it.
+    pub design: Option<String>,
 }
 
 impl Request {
     pub fn new(path: &str, kind: Kind) -> Self {
-        Request { path: path.into(), kind, reply: None, scope: None, options: Default::default() }
+        Request {
+            path: path.into(),
+            kind,
+            reply: None,
+            scope: solidcraft_engine::io::vfs::current_scope(),
+            options: Default::default(),
+            allow_hosts: Vec::new(),
+            design: None,
+        }
     }
     fn insert(&self) -> bool {
         self.kind == Kind::Insert
@@ -65,9 +85,11 @@ impl Request {
         match &self.kind {
             Kind::Open => ("doc.open", self.params()),
             Kind::Insert if solidcraft_engine::io::is_mesh_path(&self.path) => ("file.insert_mesh", self.params()),
-            Kind::Insert => ("file.insert_step", self.params()),
+            Kind::Insert if solidcraft_engine::io::is_point_cloud_path(&self.path) => ("pointcloud.insert", self.params()),
+            Kind::Insert => (insert_command(&self.path), self.params()),
             Kind::Recover { id, dir } => ("doc.recover", json!({"id": id, "dir": dir})),
             Kind::ExportDxf => ("file.export_view_dxf", Value::Object(self.options.clone())),
+            Kind::UpdateLinks => ("component.update_links", Value::Object(self.options.clone())),
         }
     }
     fn answer(&self, r: Result<Value, String>) {
@@ -78,6 +100,12 @@ impl Request {
             });
         }
     }
+}
+
+/// Route drawing files to the same commands as the sketch's Insert DXF and Insert SVG.
+pub(crate) fn insert_command(path: &str) -> &'static str {
+    solidcraft_engine::cmd::drawing_import_command(path)
+        .unwrap_or_else(|| if solidcraft_engine::io::is_mesh_path(path) { "file.insert_mesh" } else { "file.insert_step" })
 }
 
 struct Made {
@@ -172,6 +200,10 @@ pub struct FileLoad {
 }
 
 impl FileLoad {
+    /// How many more requests can wait.
+    pub(crate) fn room(&self) -> usize {
+        crate::documents::MAX_OPEN.saturating_sub(self.queued.len())
+    }
     /// A file operation is under way: the design waits for it.
     pub fn busy(&self) -> bool {
         self.running.as_ref().is_some_and(|r| !r.cancelled()) || !self.queued.is_empty()
@@ -209,6 +241,9 @@ pub fn begin(app: &mut SolveApp, path: &str, insert: bool) {
 
 /// Queue a file operation; on the web (no threads) it runs now.
 pub fn begin_request(app: &mut SolveApp, request: Request) -> Result<(), String> {
+    if app.file_load.idle() && reuse_open(app, &request) {
+        return Ok(());
+    }
     #[cfg(target_arch = "wasm32")]
     {
         if staged_kind(&request) {
@@ -223,6 +258,8 @@ pub fn begin_request(app: &mut SolveApp, request: Request) -> Result<(), String>
             }
             Kind::Open => {
                 app.open_path(&request.path);
+                // Opened in place of the blank tab it made, with no switch to it.
+                crate::edit_in_place::attach(app);
                 Ok(Value::Null)
             }
             Kind::Recover { .. } => {
@@ -240,6 +277,10 @@ pub fn begin_request(app: &mut SolveApp, request: Request) -> Result<(), String>
                     app.set_status(crate::i18n::format("ui.saved_to", &[("path", &request.path)]), false);
                 }
                 r
+            }
+            Kind::UpdateLinks => {
+                let (command, params) = request.command();
+                solidcraft_engine::io::vfs::allowing_hosts(&request.allow_hosts, || app.run(command, params))
             }
         };
         request.answer(r);
@@ -267,6 +308,36 @@ pub(crate) fn queue(app: &mut SolveApp, request: Request) -> Result<(), String> 
     Ok(())
 }
 
+/// Answer each ordinary open separately, including queued requests for the same file.
+/// Validate the caller's scope before looking at existing sessions or resolving paths.
+fn reuse_open(app: &mut SolveApp, request: &Request) -> bool {
+    if request.kind != Kind::Open {
+        return false;
+    }
+    let reused = solidcraft_engine::io::vfs::scoped(request.scope.clone(), || {
+        solidcraft_engine::io::vfs::check(&request.path).map_err(|e| e.to_string())?;
+        // Let the command validate import-specific options, even for an existing tab.
+        if !request.options.is_empty() {
+            return Ok(false);
+        }
+        crate::documents::reuse_path(app, &request.path)
+    });
+    match reused {
+        Ok(false) => false,
+        Ok(true) => {
+            let s = &app.session;
+            request.answer(Ok(json!({"path": request.path, "features": s.doc.features.len(),
+                "errors": s.model.results.iter().filter(|r| r.error.is_some()).count(), "name": s.doc.name})));
+            true
+        }
+        Err(e) => {
+            app.set_status(e.clone(), true);
+            request.answer(Err(e));
+            true
+        }
+    }
+}
+
 /// A control-channel (MCP) `doc.open` or STEP/mesh import runs like File > Open: off the window
 /// thread, answered when the file is in. Other requests come back to be handled now.
 pub fn control(app: &mut SolveApp, req: crate::control::ControlRequest) -> Option<crate::control::ControlRequest> {
@@ -276,7 +347,7 @@ pub fn control(app: &mut SolveApp, req: crate::control::ControlRequest) -> Optio
     let command = req.params.get("command").or(req.params.get("id")).and_then(Value::as_str);
     let kind = match command {
         Some("doc.open") => Kind::Open,
-        Some("file.insert_step" | "file.insert_mesh") => Kind::Insert,
+        Some("file.insert_step" | "file.insert_mesh" | "pointcloud.insert") => Kind::Insert,
         Some("file.export_view_dxf") => Kind::ExportDxf,
         _ => return Some(req),
     };
@@ -300,7 +371,8 @@ pub fn control(app: &mut SolveApp, req: crate::control::ControlRequest) -> Optio
         options.remove("path");
         options.retain(|_, v| !v.is_null());
     }
-    let _ = begin_request(app, Request { path: path.into(), kind, reply: Some(req.reply.clone()), scope, options });
+    let request = Request { path: path.into(), kind, reply: Some(req.reply.clone()), scope, options, allow_hosts: Vec::new(), design: None };
+    let _ = begin_request(app, request);
     None
 }
 
@@ -333,6 +405,13 @@ fn start(app: &mut SolveApp) {
         return;
     }
     let Some(request) = app.file_load.queued.pop_front() else { return };
+    if reuse_open(app, &request) {
+        return;
+    }
+    if request.design.as_deref().is_some_and(|d| !app.session.path.as_deref().is_some_and(|p| crate::documents::same_path(p, d))) {
+        request.answer(Err("the design it was for is no longer shown".into()));
+        return;
+    }
     if matches!(request.kind, Kind::Open | Kind::Recover { .. })
         && app.docs.count() >= crate::documents::MAX_OPEN
         && !crate::documents::active_is_blank(app)
@@ -344,9 +423,14 @@ fn start(app: &mut SolveApp) {
     }
     let insert = request.insert();
     let before = if insert { app.session.world_state().bodies.iter().map(|b| b.name.clone()).collect() } else { Vec::new() };
-    let mut scratch = if insert || request.kind == Kind::ExportDxf { app.session.scratch() } else { Session::default() };
+    let update = request.kind == Kind::UpdateLinks;
+    let mut scratch = if insert || update || request.kind == Kind::ExportDxf { app.session.scratch() } else { Session::default() };
     if insert {
         scratch.selection = app.session.selection.clone();
+    }
+    if update {
+        // Link paths are kept relative to the design's own file.
+        scratch.path.clone_from(&app.session.path);
     }
     let base = app.session.doc.clone();
     let base_revision = app.session.revision;
@@ -362,6 +446,7 @@ fn start(app: &mut SolveApp) {
     let (preview_tx, preview_rx) = std::sync::mpsc::channel();
     let (command, params) = request.command();
     let scope = request.scope.clone();
+    let allow_hosts = request.allow_hosts.clone();
     let thumbnail = request.kind == Kind::Open;
     // While a design rebuilds, a picture of what is built so far (a large design takes a while).
     let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -421,8 +506,11 @@ fn start(app: &mut SolveApp) {
                 }
             }));
         }
+        // Servers allowed once hold for this request only, on this worker thread.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compute(scratch, command, &params, scope, thumbnail, &worker_phase, &worker_progress)
+            solidcraft_engine::io::vfs::allowing_hosts(&allow_hosts, || {
+                compute(scratch, command, &params, scope, thumbnail, &worker_phase, &worker_progress)
+            })
         }))
         .unwrap_or_else(|_| Err("the file operation failed; the current design is unchanged".into()));
         worker_finished.store(true, Ordering::Relaxed);
@@ -536,7 +624,7 @@ fn step_staged(running: &mut Running) {
         // Parse and walk the file. The reading keeps the watch: its steps report progress and
         // stop on Cancel.
         let read = solidcraft_engine::io::vfs::scoped(scope, || {
-            let bytes = solidcraft_engine::io::vfs::read(&path, solidcraft_engine::io::MAX_STEP_BYTES).map_err(|e| format!("{path}: {e}"))?;
+            let bytes = solidcraft_engine::io::limits::read(&path, solidcraft_engine::io::limits::Kind::Step).map_err(|e| format!("{path}: {e}"))?;
             // The same text the import command makes of the bytes, so it finds this reading.
             let text = String::from_utf8_lossy(&bytes).into_owned();
             solidcraft_engine::doc::progress::watch(progress.clone(), || solidcraft_engine::kernel::StepReading::new(&text))
@@ -814,6 +902,18 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
                 request.answer(Ok(made.result));
             }
             _ if running.cancelled() => request.answer(Err("file operation cancelled".into())),
+            Ok(made) if request.kind == Kind::UpdateLinks && running.matches(&app.session) => {
+                let (id, _) = request.command();
+                app.session.accept_computed(made.session);
+                app.big_operation = true;
+                crate::linked_source::read_again(app, request.options.get("component").and_then(Value::as_u64));
+                let r = Ok(made.result);
+                app.finish_command(id, &r);
+                let language = crate::i18n::Locale::for_language(&app.preferences.language);
+                app.set_status(language.format("ui.command_done", &[("command", language.label(crate::command_label(id)))]), false);
+                request.answer(r);
+            }
+            Ok(_) if reuse_open(app, request) => {}
             Ok(made) if running.matches(&app.session) => {
                 // Not meshed yet: framing it while it goes in must not mesh it here.
                 app.open_meshing_next = true;
@@ -862,7 +962,10 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
             }
             Err(e) => {
                 request.answer(Err(e.clone()));
-                if let Kind::Recover { id, dir } = &request.kind {
+                if request.kind == Kind::UpdateLinks {
+                    // Said as when the command ran here (the status line, the run's messages).
+                    app.finish_command(request.command().0, &Err(e));
+                } else if let Kind::Recover { id, dir } = &request.kind {
                     reoffer(app, id, dir.as_deref());
                     app.set_status(format!("could not recover {}: {e}. Discard it or choose Later", request.path), true);
                 } else {
@@ -902,6 +1005,13 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     let name = match &r.request.kind {
         Kind::Recover { .. } => r.request.path.clone(),
+        // The linked design being read again, once the worker is on one.
+        Kind::UpdateLinks => match r.progress.item() {
+            Some((name, i, n)) => {
+                crate::i18n::format("file_load.link_item", &[("name", &name), ("done", &(i + 1).min(n).to_string()), ("total", &n.to_string())])
+            }
+            None => app.session.doc.name.clone(),
+        },
         _ => std::path::Path::new(&r.request.path).file_name().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
     };
     let phase = r.phase.load(Ordering::Relaxed);
@@ -944,6 +1054,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             Kind::Open => "file_load.opening",
             Kind::Recover { .. } => "file_load.recovering",
             Kind::ExportDxf => "dxf.exporting",
+            Kind::UpdateLinks => "file_load.updating_links",
         })
     };
     let icon = match r.request.kind {
@@ -951,6 +1062,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         Kind::Open => "open",
         Kind::Recover { .. } => "restore",
         Kind::ExportDxf => "export",
+        Kind::UpdateLinks => "update",
     };
     let (closed, action) = ui_kit::Window::new(card_id, icon, title)
         .cards(((cover.width() - 16.0) / crate::theme::Tokens::get().form_card_width).clamp(0.5, 1.3))
@@ -1002,6 +1114,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             } else {
                 1.0
             };
+            // Linked designs read again: how far through them, the one being read in part.
+            let fraction = match r.progress.item().filter(|_| r.request.kind == Kind::UpdateLinks && !cancelled) {
+                Some((_, i, n)) => (i as f32 + fraction.clamp(0.0, 1.0)) / n.max(1) as f32,
+                None => fraction,
+            };
             ui_kit::progress(ui, "file_load", fraction);
         });
     // Cancel (and Esc) was a handle of its own before the card became a kit Prompt.
@@ -1020,6 +1137,168 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn completed_open(app: &mut SolveApp, request: Request, session: Session) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(Made { session, result: json!({"loaded": true}), thumbnail: false })).unwrap();
+        app.file_load.running = Some(Running {
+            request,
+            base: app.session.doc.clone(),
+            base_revision: app.session.revision,
+            before: Vec::new(),
+            rx,
+            phase: Arc::new(AtomicU8::new(0)),
+            progress: Arc::new(Progress::default()),
+            preview_rx: None,
+            preview: None,
+            partial_rx: None,
+            built: None,
+            staged: None,
+        });
+    }
+
+    #[test]
+    fn repeated_queued_opens_reply_once_and_keep_one_session() {
+        let mut app = SolveApp::new(Session::default(), Default::default());
+        let mut session = Session::default();
+        session.path = Some("queued.solidcraft".into());
+        let mut first = Request::new("queued.solidcraft", Kind::Open);
+        let (tx, first_reply) = std::sync::mpsc::channel();
+        first.reply = Some(tx);
+        completed_open(&mut app, first, session);
+        let mut replies = vec![first_reply];
+        for _ in 0..3 {
+            let mut request = Request::new("queued.solidcraft", Kind::Open);
+            let (tx, rx) = std::sync::mpsc::channel();
+            request.reply = Some(tx);
+            replies.push(rx);
+            begin_request(&mut app, request).unwrap();
+        }
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        let loaded = app.session.doc.clone();
+        app.session.execute("solid.box", &json!({"length": 2, "width": 3, "height": 4})).unwrap();
+        let dirty = app.session.doc.clone();
+        assert!(!Arc::ptr_eq(&loaded, &dirty));
+        for _ in 0..3 {
+            tick(&mut app, &ctx);
+        }
+        assert!(app.file_load.idle());
+        assert_eq!(app.docs.count(), 1);
+        assert!(Arc::ptr_eq(&dirty, &app.session.doc));
+        assert!(app.session.is_dirty());
+        for rx in replies {
+            assert_eq!(rx.try_recv().unwrap()["ok"], true);
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn finished_open_reuses_existing_dirty_tab_and_scope_still_applies() {
+        let mut app = SolveApp::new(Session::default(), Default::default());
+        app.session.path = Some("existing.solidcraft".into());
+        app.session.execute("solid.box", &json!({"length": 2, "width": 3, "height": 4})).unwrap();
+        let dirty = app.session.doc.clone();
+        let undo = app.session.undo.len();
+        let camera = app.cam;
+        crate::documents::new_tab(&mut app);
+        let mut loaded = Session::default();
+        loaded.path = Some("existing.solidcraft".into());
+        let mut request = Request::new("existing.solidcraft", Kind::Open);
+        let (tx, rx) = std::sync::mpsc::channel();
+        request.reply = Some(tx);
+        completed_open(&mut app, request, loaded);
+        tick(&mut app, &egui::Context::default());
+        assert_eq!(rx.try_recv().unwrap()["result"]["features"], 1);
+        assert_eq!(app.docs.count(), 2);
+        assert_eq!(app.docs.active, 0);
+        assert!(Arc::ptr_eq(&dirty, &app.session.doc));
+        assert_eq!(app.session.undo.len(), undo);
+        assert_eq!(app.cam, camera);
+        assert!(app.session.is_dirty());
+
+        let mut denied = Request::new("existing.solidcraft", Kind::Open);
+        denied.scope = Some(Default::default());
+        let (tx, rx) = std::sync::mpsc::channel();
+        denied.reply = Some(tx);
+        begin_request(&mut app, denied).unwrap();
+        assert_eq!(rx.try_recv().unwrap()["ok"], false);
+        assert!(rx.try_recv().is_err());
+        assert!(app.file_load.idle());
+        assert!(Arc::ptr_eq(&dirty, &app.session.doc));
+        // ui.file dispatch carries its scope on the calling thread; preserve it in the queue.
+        solidcraft_engine::io::vfs::scoped(Some(Default::default()), || {
+            begin(&mut app, "existing.solidcraft", false);
+        });
+        assert!(app.status.as_ref().is_some_and(|s| s.2 && s.0.contains("outside the folders")));
+        assert!(!reuse_open(&mut app, &Request::new("existing.solidcraft", Kind::Insert)));
+        assert!(!reuse_open(&mut app, &Request::new("existing.solidcraft", Kind::Recover { id: "test".into(), dir: None })));
+    }
+
+    #[test]
+    fn drawing_insert_and_drop_reuse_the_active_sketch_or_create_xy() {
+        let mut h = crate::scenario::Harness::new();
+        let dxf = solidcraft_engine::io::write_dxf(&[
+            solidcraft_engine::io::Geom2::Line(solidcraft_engine::geom::Vec2::ZERO, solidcraft_engine::geom::Vec2::new(10.0, 0.0)),
+            solidcraft_engine::io::Geom2::Arc {
+                c: solidcraft_engine::geom::Vec2::ZERO,
+                a: solidcraft_engine::geom::Vec2::new(5.0, 0.0),
+                b: solidcraft_engine::geom::Vec2::new(0.0, 5.0),
+            },
+        ]);
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L10 0 L10 10"/></svg>"#;
+        for (file, text) in [("outline.DXF", dxf.as_str()), ("outline.SVG", svg)] {
+            h.app.run("file.new", json!({})).unwrap();
+            h.app.run("sketch.create", json!({"plane":"YZ"})).unwrap();
+            h.app.run("sketch.finish", json!({})).unwrap();
+            let path = h.dir.join(file).to_string_lossy().into_owned();
+            std::fs::write(&path, text).unwrap();
+            h.app.insert_path_async(&path);
+            let wait = |h: &mut crate::scenario::Harness| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                while h.app.file_load.busy() && std::time::Instant::now() < deadline {
+                    h.frames(1);
+                    std::thread::yield_now();
+                }
+                assert!(!h.app.file_load.busy());
+            };
+            wait(&mut h);
+            assert_eq!(h.app.session.doc.features.len(), 2, "{:?}", h.app.status);
+            let id = h.app.session.active_sketch.unwrap();
+            assert_eq!(h.app.session.model.state().sketch(id).unwrap().plane, solidcraft_engine::geom::Plane::XY);
+            assert_eq!(h.app.session.doc.sketch(id).unwrap().curves.len(), 2);
+            h.app.cam.set_view(solidcraft_engine::render::StandardView::Top);
+            h.app.fit_view();
+            h.run(&json!([{ "shot": format!("insert-{file}") }])).unwrap();
+            h.app.drop_path(&path);
+            wait(&mut h);
+            assert_eq!(h.app.session.active_sketch, Some(id));
+            assert_eq!(h.app.session.doc.features.len(), 2);
+            assert_eq!(h.app.session.doc.sketch(id).unwrap().curves.len(), 4);
+            h.app.run("sketch.finish", json!({})).unwrap();
+            h.app.drop_path(&path);
+            wait(&mut h);
+            assert_eq!(h.app.session.doc.features.len(), 3);
+            let new_id = h.app.session.active_sketch.unwrap();
+            assert_ne!(id, new_id);
+            assert_eq!(h.app.session.doc.sketch(new_id).unwrap().curves.len(), 2);
+            h.app.insert_path(&path);
+            assert_eq!(h.app.session.doc.sketch(new_id).unwrap().curves.len(), 4);
+        }
+    }
+
+    #[test]
+    fn point_cloud_insert_keeps_all_options_on_the_worker_request() {
+        let mut request = Request::new("scan.PLY", Kind::Insert);
+        request.options =
+            json!({"units": "m", "max_points": 1000, "color_by": "height", "height_range": [1, 20], "name": "Scan"}).as_object().unwrap().clone();
+        let (command, params) = request.command();
+        assert_eq!(command, "pointcloud.insert");
+        assert_eq!(
+            params,
+            json!({"path": "scan.PLY", "units": "m", "max_points": 1000, "color_by": "height", "height_range": [1, 20], "name": "Scan"})
+        );
+    }
 
     #[test]
     fn dxf_export_progress_keeps_frames_alive_and_never_adopts_a_worker_document() {

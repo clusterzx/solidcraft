@@ -13,11 +13,13 @@ pub struct Catalog {
     pub name: &'static str,
     source: &'static str,
     messages: OnceLock<Messages>,
+    /// The messages in display order, for a catalog with right-to-left text (see [`crate::bidi`]).
+    shown: OnceLock<Option<Messages>>,
 }
 
 impl Catalog {
     const fn new(id: &'static str, name: &'static str, source: &'static str) -> Self {
-        Self { id, name, source, messages: OnceLock::new() }
+        Self { id, name, source, messages: OnceLock::new(), shown: OnceLock::new() }
     }
 
     fn messages(&'static self) -> &'static Messages {
@@ -29,9 +31,33 @@ impl Catalog {
             }
         })
     }
+
+    /// The messages as egui must be given them: right-to-left lines in display order, since egui
+    /// has no bidirectional layout (see [`crate::bidi`]). The same map as [`Self::messages`] for
+    /// every other catalog.
+    fn shown(&'static self) -> &'static Messages {
+        let shown = self.shown.get_or_init(|| {
+            let messages = self.messages();
+            messages
+                .values()
+                .any(|text| crate::bidi::has_rtl(text))
+                .then(|| messages.iter().map(|(id, text)| (id.clone(), crate::bidi::visual_template(text).into_owned())).collect())
+        });
+        match shown {
+            Some(shown) => shown,
+            None => self.messages(),
+        }
+    }
+
+    /// The language's own name as the language list draws it.
+    pub fn display_name(&self) -> std::borrow::Cow<'static, str> {
+        crate::bidi::visual(self.name)
+    }
 }
 
 static ENGLISH: Catalog = Catalog::new("en", "English", include_str!(concat!(env!("OUT_DIR"), "/locales/en.json")));
+static ARABIC: Catalog = Catalog::new("ar", "العربية", include_str!(concat!(env!("OUT_DIR"), "/locales/ar.json")));
+static BOSNIAN: Catalog = Catalog::new("bs", "Bosanski", include_str!(concat!(env!("OUT_DIR"), "/locales/bs.json")));
 static CZECH: Catalog = Catalog::new("cs", "Čeština", include_str!(concat!(env!("OUT_DIR"), "/locales/cs.json")));
 static DANISH: Catalog = Catalog::new("da", "Dansk", include_str!(concat!(env!("OUT_DIR"), "/locales/da.json")));
 static GERMAN: Catalog = Catalog::new("de", "Deutsch", include_str!(concat!(env!("OUT_DIR"), "/locales/de.json")));
@@ -40,17 +66,21 @@ static ENGLISH_UK: Catalog = Catalog::new("en-GB", "English (UK)", include_str!(
 static SPANISH: Catalog = Catalog::new("es", "Español (España)", include_str!(concat!(env!("OUT_DIR"), "/locales/es.json")));
 static FRENCH: Catalog = Catalog::new("fr", "Français", include_str!(concat!(env!("OUT_DIR"), "/locales/fr.json")));
 static GALICIAN: Catalog = Catalog::new("gl", "Galego", include_str!(concat!(env!("OUT_DIR"), "/locales/gl.json")));
+static HEBREW: Catalog = Catalog::new("he", "עברית", include_str!(concat!(env!("OUT_DIR"), "/locales/he.json")));
+static CROATIAN: Catalog = Catalog::new("hr", "Hrvatski", include_str!(concat!(env!("OUT_DIR"), "/locales/hr.json")));
 static HUNGARIAN: Catalog = Catalog::new("hu", "Magyar", include_str!(concat!(env!("OUT_DIR"), "/locales/hu.json")));
 static INDONESIAN: Catalog = Catalog::new("id", "Bahasa Indonesia", include_str!(concat!(env!("OUT_DIR"), "/locales/id.json")));
 static ITALIAN: Catalog = Catalog::new("it", "Italiano", include_str!(concat!(env!("OUT_DIR"), "/locales/it.json")));
 static JAPANESE: Catalog = Catalog::new("ja", "日本語", include_str!(concat!(env!("OUT_DIR"), "/locales/ja.json")));
 static KOREAN: Catalog = Catalog::new("ko", "한국어", include_str!(concat!(env!("OUT_DIR"), "/locales/ko.json")));
 static MALAY: Catalog = Catalog::new("ms", "Bahasa Melayu", include_str!(concat!(env!("OUT_DIR"), "/locales/ms.json")));
+static NORWEGIAN: Catalog = Catalog::new("nb", "Norsk bokmål", include_str!(concat!(env!("OUT_DIR"), "/locales/nb.json")));
 static DUTCH: Catalog = Catalog::new("nl", "Nederlands", include_str!(concat!(env!("OUT_DIR"), "/locales/nl.json")));
 static POLISH: Catalog = Catalog::new("pl", "Polski", include_str!(concat!(env!("OUT_DIR"), "/locales/pl.json")));
 static PORTUGUESE_BR: Catalog = Catalog::new("pt-BR", "Português (Brasil)", include_str!(concat!(env!("OUT_DIR"), "/locales/pt-BR.json")));
 static ROMANIAN: Catalog = Catalog::new("ro", "Română", include_str!(concat!(env!("OUT_DIR"), "/locales/ro.json")));
 static RUSSIAN: Catalog = Catalog::new("ru", "Русский", include_str!(concat!(env!("OUT_DIR"), "/locales/ru.json")));
+static SERBIAN: Catalog = Catalog::new("sr", "Српски", include_str!(concat!(env!("OUT_DIR"), "/locales/sr.json")));
 static SWEDISH: Catalog = Catalog::new("sv", "Svenska", include_str!(concat!(env!("OUT_DIR"), "/locales/sv.json")));
 static TURKISH: Catalog = Catalog::new("tr", "Türkçe", include_str!(concat!(env!("OUT_DIR"), "/locales/tr.json")));
 static UKRAINIAN: Catalog = Catalog::new("uk", "Українська", include_str!(concat!(env!("OUT_DIR"), "/locales/uk.json")));
@@ -62,6 +92,8 @@ static CHINESE_TRADITIONAL: Catalog = Catalog::new("zh-TW", "繁體中文", incl
 #[rustfmt::skip]
 pub const LOCALES: &[&Catalog] = &[
     &ENGLISH,
+    &ARABIC,
+    &BOSNIAN,
     &CZECH,
     &DANISH,
     &GERMAN,
@@ -69,17 +101,21 @@ pub const LOCALES: &[&Catalog] = &[
     &SPANISH,
     &FRENCH,
     &GALICIAN,
+    &HEBREW,
+    &CROATIAN,
     &HUNGARIAN,
     &INDONESIAN,
     &ITALIAN,
     &JAPANESE,
     &KOREAN,
     &MALAY,
+    &NORWEGIAN,
     &DUTCH,
     &POLISH,
     &PORTUGUESE_BR,
     &ROMANIAN,
     &RUSSIAN,
+    &SERBIAN,
     &SWEDISH,
     &TURKISH,
     &UKRAINIAN,
@@ -105,9 +141,14 @@ impl Locale {
         self.0.name
     }
 
-    /// Stable message ID → translation → English → ID.
+    /// The language's own name as the language list draws it.
+    pub fn display_name(self) -> std::borrow::Cow<'static, str> {
+        self.0.display_name()
+    }
+
+    /// Stable message ID → translation → English → ID, in display order (see [`crate::bidi`]).
     pub fn text(self, id: &str) -> &str {
-        self.0.messages().get(id).or_else(|| ENGLISH.messages().get(id)).map_or(id, String::as_str)
+        self.0.shown().get(id).or_else(|| ENGLISH.messages().get(id)).map_or(id, String::as_str)
     }
 
     /// Translate source labels from engine/UI tables, preserving unknown labels.
@@ -129,7 +170,7 @@ impl Locale {
         if let Some(candidates) = ids.get(label) {
             // Preserve the old last-ID preference among available translations. A new
             // English-only alias must not hide a translation that already exists here.
-            if let Some(text) = candidates.iter().rev().find_map(|id| self.0.messages().get(*id)) {
+            if let Some(text) = candidates.iter().rev().find_map(|id| self.0.shown().get(*id)) {
                 return text;
             }
             if let Some(id) = candidates.last() {
@@ -164,6 +205,22 @@ impl Locale {
     /// a UI label ("Fillet", "Boss"); only the default names are translated.
     pub fn given_name(self, text: &str) -> String {
         self.default_name(text).unwrap_or_else(|| text.to_string())
+    }
+
+    /// Evaluation errors stay English for scripts; the empty Cut/Intersect hint that names
+    /// another component is translated where it is shown. Other text is returned unchanged.
+    pub fn diagnostic(self, text: &str) -> String {
+        const PREFIX: &str = "there is no body to cut or intersect in component '";
+        if let Some((before, detail)) = text.split_once(PREFIX)
+            && let Some((component, detail)) = detail.split_once("'; the tool may overlap '")
+            && let Some((body, detail)) = detail.split_once("' in component '")
+            && let Some((other, after)) = detail.split_once("' — activate that component or pick the body as a target")
+        {
+            let (component, body, other) = (self.given_name(component), self.given_name(body), self.given_name(other));
+            let message = self.format("diagnostic.empty_boolean_component", &[("component", &component), ("body", &body), ("other", &other)]);
+            return format!("{before}{message}{after}");
+        }
+        text.to_string()
     }
 
     /// Translate generated browser names and labels, preserving custom names otherwise.
@@ -249,6 +306,14 @@ pub fn tr(id: &str) -> &str {
 pub fn tr_label(label: &str) -> &str {
     CURRENT.with(|current| current.get().label(label))
 }
+
+/// Every English catalog entry `(id, text)`, for Preferences search to match a translation
+/// back to the words it was written in.
+pub(crate) fn each_english_message(mut f: impl FnMut(&str, &str)) {
+    for (id, text) in ENGLISH.messages() {
+        f(id, text);
+    }
+}
 pub fn format(id: &str, args: &[(&str, &str)]) -> String {
     CURRENT.with(|current| current.get().format(id, args))
 }
@@ -257,6 +322,9 @@ pub fn tr_dyn(text: &str) -> String {
 }
 pub fn tr_name(text: &str) -> String {
     CURRENT.with(|current| current.get().given_name(text))
+}
+pub fn tr_diagnostic(text: &str) -> String {
+    CURRENT.with(|current| current.get().diagnostic(text))
 }
 
 #[cfg(test)]
@@ -272,7 +340,9 @@ mod tests {
             let pending: BTreeMap<String, Messages> = serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
             for (locale, messages) in pending {
                 for (id, text) in messages {
-                    assert_eq!(Locale::for_language(&locale).text(&id), text, "{locale}: {id}");
+                    // The catalogs hand right-to-left text out in display order (`crate::bidi`);
+                    // pending files hold it in reading order, as the catalogs do (#7527).
+                    assert_eq!(Locale::for_language(&locale).text(&id), crate::bidi::visual_template(&text), "{locale}: {id}");
                 }
             }
         }
@@ -307,6 +377,21 @@ mod tests {
                 assert_ne!(hint, english, "{language}: the hint must be translated");
             }
         }
+    }
+
+    #[test]
+    fn empty_boolean_component_diagnostic_translates_with_literal_names() {
+        let message = "solid.extrude: there is no body to cut or intersect in component 'Part {1}'; the tool may overlap 'Bracket' in component 'Imported STEP' — activate that component or pick the body as a target";
+        assert_eq!(Locale::for_language("en").diagnostic(message), message);
+        for (language, prefix) in [("ja", "solid.extrude: コンポーネント"), ("zh", "solid.extrude: 组件")] {
+            let translated = Locale::for_language(language).diagnostic(message);
+            assert!(translated.starts_with(prefix), "{translated}");
+            for name in ["Part {1}", "Bracket", "Imported STEP"] {
+                assert!(translated.contains(name), "{translated}");
+            }
+        }
+        let plain = "there is no body to cut or intersect";
+        assert_eq!(Locale::for_language("ja").diagnostic(plain), plain);
     }
 
     /// English first, then by id, so adding a locale edits only its own line.
@@ -361,13 +446,13 @@ mod tests {
         ENGLISH.messages().values().map(String::as_str).collect()
     }
 
-    /// Catalogs delivered complete. English is the source catalog; Czech, Italian, Japanese and Chinese
+    /// Catalogs delivered complete. English is the source catalog; Arabic, Czech, Italian, Japanese and Chinese
     /// are complete. German, Korean, Malay, Russian, French and Ukrainian
     /// are partial (German and Korean predate the coverage guards; Russian, French and Ukrainian
     /// are kept partial so a new label doesn't need more translations), so their gaps fall back
     /// to English and are reported by `cargo xtask i18n` without failing the build, while
     /// nothing in the complete catalogs may regress.
-    const COMPLETE: &[&str] = &["ja", "zh"];
+    const COMPLETE: &[&str] = &["ar", "he", "ja", "vi", "zh"];
 
     /// `text()` falls back to English silently, so a message a complete locale never received is
     /// shown in English inside an otherwise translated UI, with nothing in the build to say so.
@@ -446,6 +531,7 @@ mod tests {
         let cases = [
             ("cs", "Příruba", "Zebra analýza", "Studie pohybu"),
             ("da", "Flange", "Zebraanalyse", "Bevægelsesanalyse"),
+            ("nb", "Flens", "Zebraanalyse", "Bevegelsesanalyse"),
             ("zh", "法兰", "斑马纹分析", "运动研究"),
             ("ja", "フランジ", "ゼブラ解析", "モーション スタディ"),
             ("de", "Flansch", "Zebra-Analyse", "Bewegungsuntersuchung"),
@@ -529,6 +615,21 @@ mod tests {
         }
     }
 
+    /// "Quantity" is the number of instances in the pattern dialogs and the plotted value in the
+    /// motion study (#6538): each meaning has its own entry, and the label is the count.
+    #[test]
+    fn pattern_quantity_is_the_count_and_the_motion_plot_keeps_its_own() {
+        for catalog in LOCALES {
+            let locale = Locale(catalog);
+            assert_eq!(locale.label("Quantity"), locale.text("ui.quantity"), "{}", catalog.id);
+            assert_eq!(locale.label("Quantity 2"), locale.text("ui.quantity_2"), "{}", catalog.id);
+        }
+        let de = Locale::for_language("de");
+        assert_eq!(de.label("Quantity"), "Anzahl");
+        assert_eq!(de.label("motion.plot_quantity"), "Größe");
+        assert_eq!(Locale::for_language("en").label("motion.plot_quantity"), "Quantity");
+    }
+
     #[test]
     fn every_ui_label_literal_reaches_an_english_catalog_entry() {
         let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
@@ -570,13 +671,142 @@ mod tests {
         );
     }
 
+    #[test]
+    fn render_shell_labels_and_planned_reasons_translate_in_required_catalogs() {
+        for language in ["ja", "zh", "de", "ko"] {
+            let locale = Locale::for_language(language);
+            for label in [
+                "APPEARANCE",
+                "SCENE",
+                "LIGHTS",
+                "STAGE",
+                "CAMERA",
+                "SHOTS",
+                "LENS",
+                "FRAME",
+                "RESULT",
+                "IMAGE",
+                "BATCH",
+                "Shots",
+                "Shots Strip",
+                "Pick",
+                "Component",
+                "The live preview shows direct light only and no shadows.",
+            ] {
+                assert_ne!(locale.label(label), label, "{language}: {label}");
+            }
+            assert_ne!(locale.text("render.stage_preview_note"), Locale::for_language("en").text("render.stage_preview_note"));
+            // "Studio" is also the German word: require the translated catalog entry,
+            // rather than requiring its spelling to differ from English.
+            assert!(locale.0.messages().contains_key("toolbar.render_studio"));
+            assert_eq!(locale.label("STUDIO"), locale.text("toolbar.render_studio"));
+            let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
+            for id in english.keys().filter(|id| id.starts_with("render.inspector_")) {
+                assert!(locale.0.messages().contains_key(id), "{language}: {id}");
+            }
+            for id in [
+                "render.pick_label",
+                "render.pick_body",
+                "render.pick_face",
+                "render.pick_component",
+                "render.pick_help",
+                "render.tree_browser",
+                "render.tree_search",
+                "render.tree_more",
+                "render.shots_save",
+                "render.shots_name_help",
+                "render.shots_no_result",
+                "render.shots_result",
+                "render.studios_environments",
+                "render.frame_presets",
+                "render.size_presets",
+                "render.frame_presets_pending",
+                "render.size_presets_pending",
+                "render.search_appearances",
+                "render.library_applicable",
+                "render.library_other",
+                "render.library_apply_hint",
+                "render.studio_tiles_require_gpu",
+                "render.environment_tiles_require_raytrace",
+            ] {
+                assert_ne!(locale.text(id), Locale::for_language("en").text(id), "{language}: {id}");
+            }
+            let session = solidcraft_engine::Session::default();
+            for command in solidcraft_engine::command_specs().into_iter().filter(|c| c.planned.is_some() && crate::workspace::render_tab(c.tab)) {
+                assert_ne!(locale.label(command.label), command.label, "{language}: {}", command.id);
+                let reason = command.info(&session).disabled_reason.unwrap();
+                assert_ne!(locale.label(&reason), reason, "{language}: {} reason", command.id);
+            }
+        }
+    }
+
+    #[test]
+    fn output_viewer_labels_exist_in_all_required_catalogs() {
+        for language in ["en", "de", "ja", "ko", "zh"] {
+            let locale = Locale::for_language(language);
+            for key in [
+                "cmd.render_output_size",
+                "cmd.render_result_view",
+                "cmd.render_result_close",
+                "cmd.render_result_copy",
+                "cmd.render_lights_add",
+                "render.output_destination",
+                "render.output_destination_help",
+                "render.output_backend_ready",
+                "render.output_dimensions",
+                "render.output_effects",
+                "render.output_advanced",
+                "render.output_copy",
+                "render.output_fit",
+                "render.output_export",
+                "render.output_view_image",
+                "render.effects_gpu_only",
+                "render.output_image",
+                "render.output_check_summary",
+                "render.output_presets_help",
+                "render.size_preview",
+                "render.size_full_hd",
+                "render.size_4k",
+                "render.size_square",
+                "render.size_custom",
+                "render.output_format",
+                "render.output_exr_unavailable",
+                "render.output_largest",
+                "render.output_quality",
+                "render.output_quality_waiting",
+                "render.quality_draft",
+                "render.quality_balanced",
+                "render.quality_high",
+                "render.quality_custom",
+                "render.output_check",
+                "render.output_check_help",
+                "render.output_ready",
+                "render.output_size_ok",
+                "render.check_transmission",
+                "render.check_opaque",
+                "render.check_sorted_alpha",
+                "render.state_model",
+                "render.state_in_progress",
+                "render.state_completed",
+                "render.result_actual",
+                "render.radial_assign",
+                "render.radial_save",
+                "render.radial_fit",
+                "render.radial_compare",
+                "render.wait_add_light",
+            ] {
+                assert!(locale.0.messages().contains_key(key), "{language}: {key}");
+            }
+        }
+    }
+
     /// The mouse mapping picker shows its preset's help through `tr_label`, which the guard above
     /// can't see: the text sits in a struct field, not in a call. Each one must be the English text
     /// of its preset's catalog message, or it stays English in every locale.
     #[test]
     fn navigation_preset_help_reaches_the_catalog() {
         let english = Locale::for_language("en");
-        for preset in &crate::prefs::NAV_PRESETS {
+        for preset in crate::prefs::NAV_PRESETS {
             let id = format!("nav.{}.help", preset.id);
             assert_eq!(english.text(&id), preset.help, "{id}");
         }
@@ -845,6 +1075,61 @@ mod tests {
         assert_eq!(pt.label("NonExistentKey"), "NonExistentKey");
     }
 
+    /// Hebrew is stored in reading order; egui reverses each run of Hebrew letters but places
+    /// the runs of a line left to right, so every message comes back with its words, numbers,
+    /// units and placeholders in display order and brackets mirrored (#3457).
+    /// Arabic goes through the same right-to-left path as Hebrew: its words, numbers, units and
+    /// placeholders come back in display order, and each Arabic word's letters stay in reading
+    /// order for the shaper, which joins and reverses them.
+    #[test]
+    fn arabic_catalog_is_registered_and_comes_back_in_display_order() {
+        let ar = Locale::for_language("ar");
+        assert!(is_supported("ar"));
+        assert_eq!(ar.name(), "العربية");
+        assert_eq!(ar.display_name(), "العربية");
+        assert_eq!(ar.text("ui.preferences"), "التفضيلات");
+        assert_eq!(ar.label("Extrude"), "بثق");
+        // Two words: the second is drawn first, on the left.
+        assert_eq!(ar.text("ui.new_design"), "جديد تصميم");
+        assert_eq!(ar.dynamic("Units: mm"), "mm :الوحدات");
+        assert_eq!(ar.dynamic("Sketch1"), "1 رسم");
+        let saved = ar.format("document.save_changes", &[("name", "Bracket")]);
+        assert!(saved.starts_with("؟Bracket "), "{saved}");
+        let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
+        for id in english.keys() {
+            let text = ar.text(id);
+            assert!(
+                !text.chars().any(|c| matches!(c, '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')),
+                "{id}: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hebrew_catalog_is_registered_and_comes_back_in_display_order() {
+        let he = Locale::for_language("he");
+        assert!(is_supported("he"));
+        assert_eq!(he.name(), "עברית");
+        assert_eq!(he.display_name(), "עברית");
+        assert_eq!(he.text("ui.preferences"), "העדפות");
+        assert_eq!(he.label("Extrude"), "שליפה");
+        assert_eq!(he.dynamic("Sketch1"), "1סקיצה");
+        assert_eq!(he.dynamic("Units: mm"), "mm :יחידות");
+        assert_eq!(he.dynamic("Parameters (5)"), "(5) פרמטרים");
+        assert_eq!(he.format("document.save_changes", &[("name", "My {design}")]), "?My {design}ב־ השינויים את לשמור");
+        assert_eq!(he.given_name("Sketch of bracket"), "Sketch of bracket");
+        assert_eq!(he.label("NonExistentKey"), "NonExistentKey");
+        // No directional control characters reach egui, which would draw them as boxes.
+        let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
+        for id in english.keys() {
+            let text = he.text(id);
+            assert!(
+                !text.chars().any(|c| matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')),
+                "{id}: {text:?}"
+            );
+        }
+    }
+
     #[test]
     fn galician_catalog_is_registered_and_translates_keys() {
         let gl = Locale::for_language("gl");
@@ -902,6 +1187,9 @@ mod tests {
     #[test]
     fn new_languages_translate_keys_labels_and_default_names() {
         for (id, name, preferences, extrude, sketch1, save) in [
+            ("bs", "Bosanski", "Postavke", "Ekstrudiraj", "Skica1", "Sačuvati promjene u My {design}?"),
+            ("hr", "Hrvatski", "Postavke", "Ekstrudiraj", "Skica1", "Spremiti promjene u My {design}?"),
+            ("sr", "Српски", "Подешавања", "Екструдирај", "Скица1", "Сачувати промене у My {design}?"),
             ("hu", "Magyar", "Beállítások", "Kihúzás", "Vázlat1", "Menti a(z) My {design} módosításait?"),
             ("id", "Bahasa Indonesia", "Preferensi", "Ekstrusi", "Sketsa1", "Simpan perubahan ke My {design}?"),
             ("nl", "Nederlands", "Voorkeuren", "Extruderen", "Schets1", "Wijzigingen in My {design} opslaan?"),
@@ -974,6 +1262,7 @@ mod tests {
     const KIT_CALLS: &[KitCall] = &[
         // layout.rs: `sized_row` draws `tr_label(text)`, and every row builder reaches it.
         KitCall { name: "row", args: &[1], id: false, trim: &[1] },
+        KitCall { name: "status_line", args: &[1], id: false, trim: &[] },
         KitCall { name: "expr_row", args: &[1], id: false, trim: &[1] },
         KitCall { name: "hint_row", args: &[1], id: false, trim: &[1] },
         KitCall { name: "text_row", args: &[1], id: false, trim: &[1] },
@@ -986,6 +1275,7 @@ mod tests {
         KitCall { name: "cell_editor", args: &[3], id: false, trim: &[] },
         KitCall { name: "bounded_cell_editor", args: &[3], id: false, trim: &[] },
         KitCall { name: "search_field", args: &[3], id: false, trim: &[] },
+        KitCall { name: "menu_filter", args: &[3], id: false, trim: &[] },
         KitCall { name: "placement_field", args: &[3], id: false, trim: &[] },
         KitCall { name: "library_cell", args: &[3], id: false, trim: &[] },
         // actions.rs
@@ -1658,8 +1948,8 @@ mod tests {
 
     /// The names the hand-written kit probes import, exactly as a UI file would.
     const KIT_IMPORTS: &str = concat!(
-        "use crate::ui_kit::{row, expr_row, hint_row, text_row, choice_row, section, section_count, ",
-        "multiline_text_field, dropdown, cell_editor, bounded_cell_editor, search_field, placement_field, ",
+        "use crate::ui_kit::{row, status_line, expr_row, hint_row, text_row, choice_row, section, section_count, ",
+        "multiline_text_field, dropdown, cell_editor, bounded_cell_editor, search_field, menu_filter, placement_field, ",
         "library_cell, icon_button_at, icon_button_colored, footer, button, primary_button, ",
         "wide_primary_button, action_menu, compact_button, icon_label_button, command_menu_button, ",
         "checkbox_grid, options, checkbox_row, toggle_icon, removable_header, bin_button, ",
@@ -1682,6 +1972,7 @@ mod tests {
     fn every_kit_call_is_read_at_its_real_signature() {
         let cases: &[(&str, &[&str])] = &[
             ("row(ui, \"row\", |ui| {})", &["row"]),
+            ("status_line(ui, \"status_line\", StatusTone::Dim)", &["status_line"]),
             ("expr_row(ui, \"expr_row\", value)", &["expr_row"]),
             ("hint_row(ui, \"hint_row\", value, hint)", &["hint_row"]),
             ("text_row(ui, \"text_row\", value, hint)", &["text_row"]),
@@ -1696,6 +1987,7 @@ mod tests {
             ("cell_editor(ui, id, value, \"cell_editor\", invalid)", &["cell_editor"]),
             ("bounded_cell_editor(ui, id, value, \"bounded_cell_editor\", invalid, limit)", &["bounded_cell_editor"]),
             ("search_field(ui, id, value, \"search_field\")", &["search_field"]),
+            ("menu_filter(ui, id, value, \"menu_filter\")", &["menu_filter"]),
             ("placement_field(ui, id, value, \"placement_field\")", &["placement_field"]),
             ("library_cell(ui, id, value, \"library_cell\", |ui| {})", &["library_cell"]),
             ("icon_button_at(ui, rect, icon, \"icon_button_at\")", &["icon_button_at"]),

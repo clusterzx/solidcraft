@@ -329,6 +329,55 @@ mod tests {
         }
     }
 
+    /// #8533: a long parameter name widens the completion popup past a narrow editor.
+    #[test]
+    fn long_parameter_names_widen_the_completion_popup() {
+        let short = Editor::new("wi");
+        assert!(showing(&short.ctx, short.id));
+        let short_w = crate::scenario::rect_of("dialog:suggestions").map(|r| r.width()).unwrap_or(0.0);
+
+        let ctx = crate::fonts::test_context();
+        let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
+        let long = "Driver_MountHole_to_Cover_Shared_Base_Layout_Angle";
+        app.run("parameters.add", json!({"name": long, "expression": "8 deg"})).unwrap();
+        params_dialog::publish(&mut app, &ctx);
+        let id = egui::Id::new("long_name_completion");
+        ctx.memory_mut(|m| m.request_focus(id));
+        let mut text = "Driver".to_string();
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 400.0))), ..Default::default() },
+            |ui| {
+                begin_frame(ui.ctx());
+                params_dialog::publish(&mut app, ui.ctx());
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(120.0));
+                    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(text.chars().count()))));
+                    state.store(ui.ctx(), id);
+                    let _ = complete(ui, &response, &mut text);
+                });
+            },
+        );
+        output.textures_delta.clear();
+        // A second frame so the popup sees the caret after "Driver".
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 400.0))), ..Default::default() },
+            |ui| {
+                begin_frame(ui.ctx());
+                params_dialog::publish(&mut app, ui.ctx());
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(120.0));
+                    let _ = complete(ui, &response, &mut text);
+                });
+            },
+        );
+        output.textures_delta.clear();
+        assert!(suggestions(&ctx, "Driver").iter().any(|s| s.text == long));
+        let long_w = crate::scenario::rect_of("dialog:suggestions").map(|r| r.width()).unwrap_or(0.0);
+        assert!(long_w > short_w + 40.0, "long name popup {long_w} should outgrow short {short_w}");
+        assert!(long_w > 200.0, "popup should not stay locked to a narrow editor ({long_w})");
+    }
+
     #[test]
     fn arrows_cycle_without_moving_caret_enter_accepts_selected_without_leaking() {
         let mut e = Editor::new("2 * wi");

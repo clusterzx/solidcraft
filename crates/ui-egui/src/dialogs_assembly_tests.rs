@@ -98,6 +98,60 @@ fn revolute_joint_uses_the_picked_straight_edges() {
     assert_eq!(app.session.doc.occurrence_of(a).unwrap().transform, ground);
 }
 
+/// Two arms (a 100 x 20 x `T` plate with a hole 10 mm in from each end), B jointed by its
+/// bottom to A's top at a round edge, a straight edge or a corner picked in the dialog: when the
+/// arm is made thicker, B sits on A's new top. (These picks were kept as points where they were
+/// picked, so B stayed at the old top, sunk into A.)
+#[test]
+fn arms_jointed_at_edges_and_corners_follow_a_thicker_arm() {
+    let picks: [(&str, Vec3, Vec3, bool); 3] = [
+        ("round edge", Vec3::new(13.0, 0.0, 5.0), Vec3::new(93.0, 60.0, 0.0), false),
+        ("straight edge", Vec3::new(50.0, 10.0, 5.0), Vec3::new(50.0, 70.0, 0.0), false),
+        ("corner", Vec3::new(100.0, 10.0, 5.0), Vec3::new(100.0, 70.0, 0.0), true),
+    ];
+    for (what, pa, pb, corner) in picks {
+        let mut s = Session::default();
+        s.execute("parameters.add", &json!({"name": "T", "expression": "5 mm"})).unwrap();
+        s.execute("component.create", &json!({"name": "Arm"})).unwrap();
+        s.execute("solid.box", &json!({"length": 100, "width": 20, "height": "T", "corner": [0, -10, 0]})).unwrap();
+        for x in [10, 90] {
+            s.execute("solid.cylinder", &json!({"diameter": 6, "height": 100, "base": [x, 0, -50], "operation": "cut"})).unwrap();
+        }
+        s.execute("component.activate", &json!({"component": "root"})).unwrap();
+        let mut app = SolveApp::new(s, Services::default());
+        let a = occ(&app, "Arm");
+        app.run("occurrence.ground", json!({"occurrence": a, "grounded": true})).unwrap();
+        let b = app.run("occurrence.copy", json!({"occurrence": a, "translate": [0, 60, 0]})).unwrap()["occurrence"].as_u64().unwrap();
+        app.start("joint.create");
+        let mut d = app.dialog.clone().unwrap();
+        for p in [pa, pb] {
+            let edge = edge_sel(&app.session, p).unwrap();
+            let sel = match (&edge, corner) {
+                (Sel::Edge { body, .. }, true) => Sel::Vertex { body: body.clone(), point: p },
+                _ => edge,
+            };
+            d.pick(&app.session, sel);
+        }
+        if let Kind::Assembly(Asm::Joint(f)) = &mut d.kind {
+            f.kind = 1;
+            f.fit_limits(&app.session.doc);
+        }
+        for (id, p) in apply_commands(&app, &d).unwrap() {
+            app.run(&id, p).unwrap();
+        }
+        let world = |app: &SolveApp, o: u64, p: Vec3| {
+            solidcraft_engine::doc::apply_point(&solidcraft_engine::doc::joints::occurrence_world(&app.session.doc, o), p)
+        };
+        // The spots: a round edge's centre, else the pick; B's in the arm's own coordinates.
+        let spot = |p: Vec3| if what == "round edge" { Vec3::new(p.x - 3.0, p.y, p.z) } else { p };
+        let (spot_a, spot_b) = (spot(pa), spot(pb) - Vec3::new(0.0, 60.0, 0.0));
+        assert!(world(&app, b, spot_b).dist(spot_a) < 1e-6, "{what}: as made, B's spot is at {:?}", world(&app, b, spot_b));
+        app.run("parameters.change", json!({"name": "T", "expression": "12 mm"})).unwrap();
+        let top = spot_a + Vec3::new(0.0, 0.0, 7.0);
+        assert!(world(&app, b, spot_b).dist(top) < 1e-6, "{what}: B's spot is at {:?}, not on A's new top at {top:?}", world(&app, b, spot_b));
+    }
+}
+
 /// The preview moves B where the joint puts it and plays the motion while animating.
 #[test]
 fn joint_and_drive_preview_on_the_placed_model() {
@@ -455,6 +509,45 @@ fn picks_on_one_component_say_why_and_offer_components() {
     assert!(text_at(&out, &why).is_none(), "nothing left to say");
 }
 
+#[test]
+fn rigid_group_bodies_in_one_component_explain_how_to_separate_them() {
+    for component in [None, Some("Part")] {
+        let mut s = Session::default();
+        if let Some(name) = component {
+            s.execute("component.create", &json!({"name": name})).unwrap();
+        }
+        for x in [0, 30, 60, 90, 120] {
+            s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10, "corner": [x, 0, 0]})).unwrap();
+        }
+        let mut app = SolveApp::new(s, Services::default());
+        app.session.selection = (1..=5).map(|i| Sel::Body { name: format!("Body{i}") }).collect();
+        app.start("joint.rigid_group");
+        let d = app.dialog.take().unwrap();
+        assert_eq!(
+            apply_commands(&app, &d).unwrap_err(),
+            "These 5 bodies are all in one component (or in the design itself): use Create Components from Bodies first."
+        );
+        app.run("component.from_bodies", json!({"bodies": ["Body1", "Body2", "Body3", "Body4", "Body5"]})).unwrap();
+        assert_eq!(apply_commands(&app, &d).unwrap()[0].1["occurrences"].as_array().unwrap().len(), 5);
+    }
+}
+
+#[test]
+fn rigid_group_preserves_two_instances_of_one_component() {
+    let mut s = Session::default();
+    let first = s.execute("component.create", &json!({"name": "Part"})).unwrap()["occurrence"].as_u64().unwrap();
+    s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+    let second = s.execute("occurrence.copy", &json!({"occurrence": first, "translate": [30, 0, 0]})).unwrap()["occurrence"].as_u64().unwrap();
+    s.selection = [first, second].into_iter().map(|id| Sel::Body { name: s.occurrence_bodies(&[id], false).unwrap()[0].clone() }).collect();
+    let mut app = SolveApp::new(s, Services::default());
+    app.start("joint.rigid_group");
+    let d = app.dialog.take().unwrap();
+    let commands = apply_commands(&app, &d).unwrap();
+    assert_eq!(commands, vec![("joint.rigid_group".into(), json!({"occurrences": [first, second]}))]);
+    crate::dialogs::run_dialog(&mut app, &d).unwrap();
+    assert_eq!(app.session.doc.assembly.joints.len(), 1);
+}
+
 /// Two top faces mate face to face: B ends up upside down on A, not inside it;
 /// Flip turns it back over (into A).
 #[test]
@@ -794,6 +887,43 @@ fn drive_opens_on_the_picked_joint() {
     let rocker = app.session.doc.assembly.joints.iter().find(|j| j.name == "Rocker").unwrap().id;
     pick_joint(&mut app, rocker, false);
     assert_eq!(drive_on(&mut app), "Rocker");
+    // A rigid joint picked: it opens on that one, to say why it can't drive it (#6981).
+    app.run("joint.as_built", json!({"type": "rigid", "a": "Ground", "b": "Crank", "name": "Lock"})).unwrap();
+    let lock = app.session.doc.assembly.joints.iter().find(|j| j.name == "Lock").unwrap().id;
+    pick_joint(&mut app, lock, false);
+    assert_eq!(drive_on(&mut app), "Lock");
+    // Motion Trace still starts on a joint that moves.
+    app.dialog = None;
+    app.start("motion.trace");
+    match &app.dialog.as_ref().unwrap().kind {
+        Kind::Assembly(Asm::Trace(f)) => assert_eq!(app.session.doc.assembly.joints[f.joint].name, "Crank"),
+        k => panic!("{k:?}"),
+    }
+}
+
+/// Drive Joints in a design whose only joint is rigid (#6981): it opens on that joint and says it
+/// holds its parts still and how to let them move, runs no drive (no preview error, no Create
+/// Issue, OK off), and its Edit Joint button turns the dialog into Edit Joint on that joint.
+#[test]
+fn drive_on_a_rigid_joint_says_why_and_offers_edit_joint() {
+    let mut h = crate::scenario::Harness::new();
+    h.app = two_boxes();
+    let at = |o: &str| json!({"occurrence": o, "point": [25, 10, 5], "z": [1, 0, 0]});
+    h.app.run("joint.create", json!({"type": "rigid", "a": at("A"), "b": at("B"), "name": "Glue"})).unwrap();
+    let glue = h.app.session.doc.assembly.joints[0].id;
+    h.app.start("joint.drive");
+    h.frames(4);
+    let d = h.app.dialog.clone().unwrap();
+    let e = apply_commands(&h.app, &d).unwrap_err();
+    assert!(e.contains("Glue") && e.contains("holds its parts still") && e.contains("Revolute") && e.contains("Edit Joint"), "{e}");
+    assert!(h.app.preview.error.is_none(), "no drive is previewed");
+    assert!(crate::scenario::handle_at("dialog:create_issue").is_none(), "no Create Issue for a rigid joint");
+    h.step(&json!({"click": {"handle": "drive:edit_joint"}})).unwrap();
+    h.frames(2);
+    match &h.app.dialog.as_ref().unwrap().kind {
+        Kind::Assembly(Asm::Joint(f)) => assert_eq!(f.editing, Some(glue)),
+        k => panic!("{k:?}"),
+    }
 }
 
 /// A rigid joint has nothing to drive: Drive Joints won't start on it.
