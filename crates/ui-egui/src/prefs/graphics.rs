@@ -4,6 +4,9 @@ use super::*;
 pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get();
     ui_kit::settings_heading(ui, app.tr("prefs.graphics"), app.tr("prefs.graphics_note"));
+    if let Some(note) = &app.graphics_fallback {
+        ui_kit::text(ui, note, ui_kit::Text::Hint("graphics_fallback"));
+    }
     if app.services.graphics_path.is_some() {
         ui_kit::settings_section(ui, "graphics_card", app.tr("prefs.graphics_card"), |ui| {
             let adapters = &app.services.graphics_adapters;
@@ -105,6 +108,9 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             }
         });
         ui_kit::text(ui, app.tr("prefs.anti_aliasing_note"), ui_kit::Text::Hint("msaa"));
+        if app.msaa_compatibility {
+            ui_kit::text(ui, app.tr("prefs.anti_aliasing_amd_dx12"), ui_kit::Text::Hint("msaa_compatibility"));
+        }
         ui.add_space(t.space_6);
         ui_kit::text(ui, app.tr("ui.supersampling"), ui_kit::Text::Heading("supersampling"));
         ui.horizontal_wrapped(|ui| {
@@ -157,8 +163,10 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                     ui_kit::checkbox(ui, app.tr("ui.frame_rate_details"), &mut app.preferences.frame_rate_details)
                         .on_hover_text(app.tr("settings.frame_rate_details_note"));
                 });
+                crate::prefs::view_angles_checkbox(app, left);
                 setting::reference_geometry_through_bodies(app, left).on_hover_text(app.tr("settings.reference_geometry_through_bodies_help"));
                 setting::sketch_halo(app, left);
+                setting::vertex_markers(app, left);
             }
             if let Some(right) = columns.get_mut(1) {
                 ui_kit::checkbox(right, crate::i18n::tr_label("Ground shadow"), &mut app.ui.ground_shadow);
@@ -180,6 +188,7 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     });
     #[cfg(target_os = "linux")]
     ui_kit::settings_section(ui, "window_system", app.tr("ui.window_system"), |ui| window_system_row(app, ui));
+    setting::render_previous_geometry_budget(app, ui).on_hover_text(app.tr("prefs.render_previous_geometry_budget_help"));
     ui.horizontal(|ui| {
         ui_kit::text(ui, app.tr_label("Renderer"), ui_kit::Text::Inline);
         let renderer = match (&app.viewport.gpu, &app.help.gpu) {

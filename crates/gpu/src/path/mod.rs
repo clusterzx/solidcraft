@@ -42,7 +42,7 @@ const SHADER: &str = concat!(
     include_str!("aging.wgsl")
 );
 const MAX_TRIANGLES: u64 = MAX_GPU_PATH_TRIANGLES;
-const PARAMETER_BYTES: usize = 1168;
+const PARAMETER_BYTES: usize = 1184;
 // Eight u32 words: count low, pixel, bounce, sample, code, count high, first-writer flag, spare.
 const FAILURE_BYTES: u64 = 32;
 // A path that cannot classify its glass medium ends there. Isolated paths at the
@@ -92,11 +92,16 @@ pub fn host() -> Result<ImageHost> {
 /// Open an independent job device on the viewport's selected adapter. In particular,
 /// software fallback and safe mode must not rediscover a failing hardware driver.
 /// An explicit incompatible SOLIDCRAFT_GPU policy leaves this executor unavailable.
-/// The path tracer runs on Vulkan only: a viewport on another backend is reopened on the same
-/// GPU through Vulkan, and without one the executor is unavailable and images render on the CPU.
+/// The path tracer runs on Vulkan only. On Windows it must keep the viewport's backend:
+/// opening Vulkan drivers that startup avoided can crash inside native driver code.
+/// Elsewhere a viewport on another backend is reopened on the same GPU through Vulkan.
+/// Without a usable Vulkan adapter the executor is unavailable; CPU image methods remain usable.
 pub fn host_on_adapter(adapter: &wgpu::Adapter) -> Result<ImageHost> {
     let policy = crate::select::Policy::from_env().map_err(gpu)?;
     let info = adapter.get_info();
+    if !viewport_path_backends(info.backend, cfg!(target_os = "windows")).contains(wgpu::Backends::VULKAN) {
+        return Err(gpu(format!("{VULKAN_ONLY}; the viewport uses {:?}", info.backend)));
+    }
     if !policy.admits(crate::select::tier_of(info.device_type)) {
         return Err(gpu(format!("viewport adapter does not satisfy SOLIDCRAFT_GPU={}", policy.name())));
     }
@@ -114,6 +119,11 @@ pub fn host_on_adapter(adapter: &wgpu::Adapter) -> Result<ImageHost> {
 
 // D3D12 shader compilation is avoided; the user can select a CPU image method instead.
 const VULKAN_ONLY: &str = "the GPU path tracer requires a Vulkan driver; select a CPU image method when Vulkan is unavailable";
+
+/// Backends a viewport's path device may open, before any driver is loaded.
+fn viewport_path_backends(backend: wgpu::Backend, windows: bool) -> wgpu::Backends {
+    if windows { wgpu::Backends::from(backend) } else { wgpu::Backends::VULKAN }
+}
 
 // Path resources need six storage buffers (geometry, BVH, accumulation, HDRI,
 // textures, medium-failure counts). Request that limit only on this independent path device: raster and
@@ -309,6 +319,12 @@ fn admission(scene: &ProductScene, request: &ImageRequest, options: JobOptions) 
         return Err(JobError::new(ErrorCode::InvalidRequest, "GPU path rendering does not accept CPU raytrace options"));
     }
     options.validate()?;
+    if request.studio_weights.is_some_and(|weights| weights.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))) {
+        return Err(JobError::new(ErrorCode::InvalidRequest, "invalid studio visibility weights"));
+    }
+    if request.studio_weights.is_some() && (options.lighting.is_some() || request.environment.is_some()) {
+        return Err(JobError::new(ErrorCode::InvalidRequest, "studio weights require implicit studio lighting"));
+    }
     options.aging.validate_scene(scene)?;
     if options.finishing.photographic.active() && request.transparent_background {
         return Err(JobError::new(ErrorCode::InvalidRequest, "photographic effects require opaque output; choose it explicitly"));
@@ -741,6 +757,10 @@ impl Task {
             for value in layer {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
+        }
+        let weights = self.request.studio_weights.unwrap_or([1.0; 3]);
+        for value in [weights[0] as f32, weights[1] as f32, weights[2] as f32, 0.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
         }
         bytes
     }

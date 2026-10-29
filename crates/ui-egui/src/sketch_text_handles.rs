@@ -6,7 +6,7 @@
 //! the same way).
 use std::cell::RefCell;
 
-use egui::{Align2, CursorIcon, FontId, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, vec2};
+use egui::{Align2, CursorIcon, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, vec2};
 use serde_json::json;
 use solidcraft_engine::geom::Vec2;
 use solidcraft_engine::sketch::{LinkKind, LinkSource};
@@ -275,7 +275,7 @@ pub(crate) fn show(app: &SolveApp, ui: &egui::Ui, painter: &Painter, proj: &Proj
     let line = Stroke::new(1.0, tk.accent);
     let mut outline = s.corners.to_vec();
     outline.push(s.corners[0]);
-    painter.add(Shape::dashed_line(&outline, line, 5.0, 4.0));
+    painter.extend(crate::viewport::dashed_line(&outline, painter.clip_rect(), line, 5.0, 4.0));
     painter.line_segment([s.knob_base, s.knob], line);
     let drag = DRAG.with(|d| d.borrow().as_ref().map(|d| d.grab));
     let under = hover.and_then(|p| hit(app, proj, p)).map(|(_, g)| g);
@@ -392,7 +392,7 @@ mod tests {
         let result = h.app.run("sketch.text", json!({"text":"II","at":[0,0],"height":10})).unwrap();
         h.call("ui.view", json!({"view":"top"}));
         h.app.cam.distance = 60.0;
-        h.app.session.selection = vec![Sel::SketchCurve { id: result["curves"][0].as_str().unwrap().into() }];
+        h.app.session.selection = vec![Sel::SketchCurve { id: result["curves"][0].as_str().unwrap().into(), sketch: None }];
         h.frames(3);
         (h, result["link"].as_str().unwrap().into())
     }
@@ -466,7 +466,7 @@ mod tests {
         h.call("ui.view", json!({"view":"top"}));
         // Keep the rotated resize target clear of the floating ribbon too.
         h.app.cam.distance = 90.0;
-        h.app.session.selection = vec![Sel::SketchCurve { id: result["curves"][0].as_str().unwrap().into() }];
+        h.app.session.selection = vec![Sel::SketchCurve { id: result["curves"][0].as_str().unwrap().into(), sketch: None }];
         h.frames(3);
         let height_expr = |h: &Harness| {
             let sk = h.app.session.doc.sketch(h.app.session.active_sketch.unwrap()).unwrap();

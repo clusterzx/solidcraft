@@ -8,8 +8,9 @@
 //!   row the next launch starts in safe mode by itself.
 //! - **Safe mode** (`--safe-mode` or `SOLIDCRAFT_SAFE_MODE=1`): default settings (the saved ones
 //!   are left untouched), no recovery offer, the software renderer and CPU meshing.
-//! - **No usable graphics device**: one retry on the software renderer
-//!   (`SOLIDCRAFT_RENDERER=cpu`), then a message box saying what failed and what to try.
+//! - **A renderer that cannot start**: on Windows, try the remaining graphics APIs in order,
+//!   then the software renderer (`SOLIDCRAFT_RENDERER=cpu`). An explicit `WGPU_BACKEND` fails
+//!   cleanly without switching. Exhausted retries show a message box with the error.
 
 use std::path::{Path, PathBuf};
 
@@ -218,6 +219,34 @@ pub fn choose_backends(
     Some(WINDOWS_ORDER.into_iter().find(|b| has_hardware(*b)).unwrap_or(Backends::DX12))
 }
 
+/// Internal, process-local retry choice; never written to the graphics preference.
+pub const RETRY_BACKEND_ENV: &str = "SOLIDCRAFT_STARTUP_BACKEND";
+/// Why this launch is using a fallback, carried to the new process for status and Preferences.
+pub const FALLBACK_NOTE_ENV: &str = "SOLIDCRAFT_GRAPHICS_FALLBACK";
+
+/// A handled startup failure tries each remaining Windows API once, then software rendering.
+/// An explicit environment choice is final, including when software rendering was requested.
+pub fn fallback_backend(windows: bool, explicit: bool, cpu: bool, failed: eframe::wgpu::Backends) -> Option<&'static str> {
+    if explicit || cpu {
+        return None;
+    }
+    if windows {
+        let last = WINDOWS_ORDER.iter().rposition(|backend| failed.intersects(*backend));
+        if let Some(next) = last.and_then(|i| WINDOWS_ORDER.get(i + 1)) {
+            return Some(if *next == eframe::wgpu::Backends::VULKAN { "vulkan" } else { "gl" });
+        }
+    }
+    Some("cpu")
+}
+
+/// Keep driver diagnostics on one bounded line, including across the finite retry chain.
+pub fn fallback_note(previous: &str, failed: eframe::wgpu::Backends, next: &str, error: &str) -> String {
+    let previous: String = previous.chars().take(2048).collect();
+    let error: String = error.chars().take(1024).collect();
+    let line = format!("{previous} Graphics fallback: {failed:?} failed ({error}); trying {next}.");
+    line.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(4096).collect()
+}
+
 /// The device feature for a 32-bit float depth buffer with a stencil (reversed depth, #1434).
 pub const FLOAT_DEPTH_STENCIL: eframe::wgpu::Features = eframe::wgpu::Features::DEPTH32FLOAT_STENCIL8;
 
@@ -226,7 +255,7 @@ pub const FLOAT_DEPTH_STENCIL: eframe::wgpu::Features = eframe::wgpu::Features::
 /// asks for a float one only when whichever it picks has it.
 pub fn float_depth_everywhere(options: &eframe::egui_wgpu::WgpuConfiguration) -> bool {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &options.wgpu_setup else { return false };
-    let mut desc = eframe::wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    let mut desc = solidcraft_gpu::instance_descriptor_from_env();
     desc.backends = setup.instance_descriptor.backends;
     let instance = eframe::wgpu::Instance::new(desc);
     let adapters = pollster::block_on(instance.enumerate_adapters(setup.instance_descriptor.backends));
@@ -243,6 +272,7 @@ pub fn has_hardware_adapter(backends: eframe::wgpu::Backends) -> bool {
     let mut desc = eframe::wgpu::InstanceDescriptor::new_without_display_handle();
     desc.backends = backends;
     desc.flags = eframe::wgpu::InstanceFlags::from_build_config().with_env();
+    desc.backend_options.dx12.shader_compiler = solidcraft_gpu::dx12_compiler();
     let instance = eframe::wgpu::Instance::new(desc);
     let adapters = pollster::block_on(instance.enumerate_adapters(backends));
     let found: Vec<String> = adapters.iter().map(|a| format!("{} ({:?})", a.get_info().name, a.get_info().device_type)).collect();
@@ -273,6 +303,14 @@ pub fn system_title_bar(windows: bool, backends: eframe::wgpu::Backends) -> bool
     windows && backends.contains(Backends::GL) && !backends.intersects(Backends::DX12 | Backends::VULKAN)
 }
 
+/// The `--max-file-size` value (#4086): a size such as `2GB` or `1500MB`, at most 16 GB. It raises
+/// the largest STEP/import and design file this run reads, over the saved preference, without
+/// saving anything. A missing or bad value stops the start with this error.
+pub fn max_file_size(value: Option<&str>) -> Result<u64, String> {
+    let value = value.ok_or("--max-file-size needs a size, for example --max-file-size 2GB")?;
+    solidcraft_engine::io::limits::parse_flag(value).map_err(|e| format!("--max-file-size: {e}"))
+}
+
 /// The message shown when no window could be opened at all.
 pub fn no_window_message(error: &str, settings: Option<&Path>) -> String {
     let folder = settings.map(|d| d.display().to_string()).unwrap_or_else(|| "the SolidCraft settings folder".into());
@@ -293,6 +331,16 @@ mod tests {
 
     fn cards() -> Vec<AdapterChoice> {
         ["Integrated", "Discrete small", "Discrete large"].into_iter().map(|name| AdapterChoice { name: name.into(), compatible: true }).collect()
+    }
+
+    #[test]
+    fn max_file_size_parses_sizes_and_refuses_bad_ones() {
+        assert_eq!(max_file_size(Some("2GB")), Ok(2 << 30));
+        assert_eq!(max_file_size(Some("1500MB")), Ok(1500 << 20));
+        for bad in [None, Some(""), Some("2"), Some("17GB"), Some("lots"), Some("-1GB")] {
+            let error = max_file_size(bad).unwrap_err();
+            assert!(error.contains("--max-file-size"), "{bad:?}: {error}");
+        }
     }
 
     #[test]
@@ -443,6 +491,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_windows_backends_fall_back_in_order_and_stop_after_software() {
+        use eframe::wgpu::Backends as B;
+        assert_eq!(fallback_backend(true, false, false, B::DX12), Some("vulkan"));
+        assert_eq!(fallback_backend(true, false, false, B::VULKAN), Some("gl"));
+        assert_eq!(fallback_backend(true, false, false, B::GL), Some("cpu"));
+        assert_eq!(fallback_backend(true, false, true, B::DX12), None);
+        assert_eq!(fallback_backend(true, false, false, B::DX12 | B::VULKAN), Some("gl"));
+        assert_eq!(fallback_backend(false, false, false, B::VULKAN), Some("cpu"));
+        let note = fallback_note("", B::DX12, "vulkan", "egui_pipeline\n0x80070057");
+        assert!(note.contains("egui_pipeline 0x80070057") && note.contains("vulkan") && !note.contains('\n'));
+        let long = fallback_note(&"x".repeat(5000), B::VULKAN, "gl", &"y".repeat(5000));
+        assert!(long.chars().count() <= 4096 && long.ends_with("trying gl."));
+    }
+
+    #[test]
+    fn explicit_backend_failure_never_switches_api_or_retries_software() {
+        use eframe::wgpu::Backends as B;
+        for windows in [false, true] {
+            for cpu in [false, true] {
+                for backend in [B::DX12, B::VULKAN, B::GL, B::all()] {
+                    assert_eq!(fallback_backend(windows, true, cpu, backend), None);
+                    let mut probed = false;
+                    assert_eq!(
+                        choose_backends(windows, true, cpu, Some("vulkan"), |_| {
+                            probed = true;
+                            false
+                        }),
+                        None
+                    );
+                    assert!(!probed);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn only_opengl_on_windows_gets_the_system_title_bar() {
         use eframe::wgpu::Backends;
         assert!(system_title_bar(true, Backends::GL));
@@ -478,9 +562,16 @@ mod tests {
 
     #[test]
     fn probing_a_backend_alone_never_panics() {
-        // Whatever this machine has (often nothing): an answer, not a crash.
-        for b in WINDOWS_ORDER {
-            let _ = has_hardware_adapter(b);
+        // Whatever this machine has (often nothing): an answer, not a crash. On Windows the probe
+        // goes the way the app's does, stopping at the first backend with a GPU: a machine with
+        // D3D12 never loads its OpenGL driver into the test process, and AMD's (`atio6axx.dll`)
+        // aborted the process as it exited (#1156).
+        if cfg!(target_os = "windows") {
+            let _ = choose_backends(true, false, false, None, has_hardware_adapter);
+        } else {
+            for b in WINDOWS_ORDER {
+                let _ = has_hardware_adapter(b);
+            }
         }
     }
 
@@ -493,8 +584,18 @@ mod tests {
     #[test]
     fn the_software_adapter_is_preferred_and_its_absence_is_an_error_not_a_panic() {
         assert!(pick_cpu_adapter(&[], None).unwrap_err().contains("none"));
-        let instance = eframe::wgpu::Instance::new(eframe::wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapters = pollster::block_on(instance.enumerate_adapters(eframe::wgpu::Backends::all()));
+        // The adapters the software renderer chooses among: it starts D3D12 alone on Windows
+        // (WARP), not every backend, so the test doesn't load the OpenGL driver either (#1156).
+        let options = crate::wgpu_options(true, None);
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &options.wgpu_setup else { panic!("the software renderer makes its own device") };
+        let backends = setup.instance_descriptor.backends;
+        if cfg!(target_os = "windows") && std::env::var_os(WGPU_BACKEND_ENV).is_none() {
+            assert_eq!(backends, eframe::wgpu::Backends::DX12);
+        }
+        let mut desc = solidcraft_gpu::instance_descriptor_from_env();
+        desc.backends = backends;
+        let instance = eframe::wgpu::Instance::new(desc);
+        let adapters = pollster::block_on(instance.enumerate_adapters(backends));
         if adapters.is_empty() {
             return;
         }

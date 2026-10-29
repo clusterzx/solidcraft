@@ -128,13 +128,13 @@ fn coil(s: &mut Session, p: &Value) -> Result<Value> {
             start_angle,
             clockwise,
             operation,
-            targets: string_list(p, "targets").into_iter().map(BodyName).collect(),
+            targets: string_list(cmd, p, "targets")?.into_iter().map(BodyName).collect(),
         },
     )
 }
 
 fn curves_param(p: &Value, cmd: &str) -> Result<Vec<String>> {
-    let c = string_list(p, "curves");
+    let c = string_list(cmd, p, "curves")?;
     if c.is_empty() || c.len() > 1000 {
         return Err(bad(cmd, "`curves` must list 1…1000 sketch curve ids"));
     }
@@ -185,7 +185,7 @@ fn emboss(s: &mut Session, p: &Value) -> Result<Value> {
         Some("deboss") => true,
         Some(m) => return Err(bad(cmd, format!("unknown mode `{m}` (emboss or deboss)"))),
     };
-    let mut targets = string_list(p, "targets");
+    let mut targets = string_list(cmd, p, "targets")?;
     let face = if let Some(value) = p.get("face") {
         let local = vec3(value).ok_or_else(|| bad(cmd, "`face` must be a finite point [x,y,z]"))?;
         let at = solidcraft_doc::apply_point(&s.active_component_frame(), local);
@@ -400,7 +400,7 @@ fn replace_face(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn align(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.align";
-    let bodies = string_list(p, "bodies");
+    let bodies = string_list(cmd, p, "bodies")?;
     if bodies.is_empty() {
         return Err(bad(cmd, "`bodies` must list the bodies to move"));
     }
@@ -410,6 +410,17 @@ fn align(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, format!("no body `{b}`")));
         }
     }
+    // Picks and snaps are where the view shows them (the world); the feature moves the bodies
+    // in their component's frame, so both ends go into the first moved body's frame. A body
+    // picked in another placed component (aligning two imported parts) is found where it
+    // is shown, not where its own frame has it.
+    let frame = s
+        .placed_document()
+        .body_frames_with_source(&s.model.state())
+        .into_iter()
+        .find(|(world, own, ..)| *world == bodies[0] || *own == bodies[0])
+        .map(|(.., m)| m);
+    let inverse = frame.and_then(|m| solidcraft_doc::mat_inverse(&m)).unwrap_or(solidcraft_doc::IDENTITY);
     // A side is a plane (`from_plane`/`to_plane`: XY|XZ|YZ, a construction or offset plane, or
     // {origin, normal}), kept as a plane so the bodies follow it when it moves; or a point and, for
     // a face, its normal.
@@ -417,7 +428,7 @@ fn align(s: &mut Session, p: &Value) -> Result<Value> {
         p.get(key).map(|_| super::features::plane_param(s, p.get(key), cmd)).transpose()
     };
     let (from_plane, to_plane) = (plane(s, "from_plane")?, plane(s, "to_plane")?);
-    let pick = |s: &Session, pk: &str, fk: &str, plane: &Option<solidcraft_doc::PlaneRef>| -> Result<(Vec3, Option<Vec3>)> {
+    let world_pick = |s: &Session, pk: &str, fk: &str, plane: &Option<solidcraft_doc::PlaneRef>| -> Result<(Vec3, Option<Vec3>)> {
         if plane.is_some() {
             if p.get(pk).is_some() || p.get(fk).is_some() {
                 return Err(bad(cmd, format!("give `{pk}_plane` or `{pk}`/`{fk}`, not both")));
@@ -426,7 +437,7 @@ fn align(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok((Vec3::ZERO, None));
         }
         if let Some(fp) = p.get(fk).and_then(vec3) {
-            let n = super::face::face_normal(s, fp).ok_or_else(|| bad(cmd, format!("`{fk}` must be on a planar face")))?;
+            let n = super::face::face_normal_world(s, fp).ok_or_else(|| bad(cmd, format!("`{fk}` must be on a planar face")))?;
             return Ok((fp, Some(n)));
         }
         // The origin point.
@@ -443,6 +454,13 @@ fn align(s: &mut Session, p: &Value) -> Result<Value> {
             .and_then(vec3)
             .map(|v| (v, None))
             .ok_or_else(|| bad(cmd, format!("give `{pk}`, `{fk}` or `{pk}_plane` ([x, y, z], \"origin\", or a plane)")))
+    };
+    let pick = |s: &Session, pk: &str, fk: &str, plane: &Option<solidcraft_doc::PlaneRef>| -> Result<(Vec3, Option<Vec3>)> {
+        let (at, n) = world_pick(s, pk, fk, plane)?;
+        if plane.is_some() {
+            return Ok((at, n));
+        }
+        Ok((solidcraft_doc::apply_point(&inverse, at), n.and_then(|n| solidcraft_doc::apply_vector(&inverse, n).normalized())))
     };
     let (from, from_normal) = pick(s, "from", "from_face", &from_plane)?;
     let (to, to_normal) = pick(s, "to", "to_face", &to_plane)?;
@@ -471,7 +489,7 @@ fn align(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.remove";
-    let bodies = string_list(p, "bodies");
+    let bodies = string_list(cmd, p, "bodies")?;
     if bodies.is_empty() {
         return Err(bad(cmd, "`bodies` must list bodies"));
     }
@@ -523,7 +541,7 @@ pub(super) fn snap_point(s: &Session, kind: &str, at: Vec3) -> Option<Vec3> {
 
 fn boundary_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "solid.boundary_fill";
-    let tools = string_list(p, "tools");
+    let tools = string_list(cmd, p, "tools")?;
     let st = s.model.state();
     if tools.is_empty() || tools.len() > 64 || tools.iter().any(|t| st.body(t).is_none()) {
         return Err(bad(cmd, "`tools` must list 1…64 bodies"));

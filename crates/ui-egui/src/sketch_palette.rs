@@ -145,7 +145,7 @@ pub fn apply_mode(app: &mut SolveApp, id: &str, result: &Value) {
 
 /// Selected curves of the active sketch.
 fn selected_curves(app: &SolveApp) -> Vec<String> {
-    app.session.selection.iter().filter_map(|s| if let Sel::SketchCurve { id } = s { Some(id.clone()) } else { None }).collect()
+    app.session.selection.iter().filter_map(|s| if let Sel::SketchCurve { id, .. } = s { Some(id.clone()) } else { None }).collect()
 }
 
 /// The line types among the selected curves of the active sketch, indexed like the palette's
@@ -253,9 +253,10 @@ pub fn fits_beside_a_dialog(app: &SolveApp, ctx: &egui::Context) -> bool {
 }
 
 /// Is the palette on screen? It stays for as long as a sketch is being edited, a command dialog
-/// open or not: the dialog takes the left edge of the viewport and the palette keeps the right.
+/// open or not: the dialog takes the left edge of the viewport (or the left column) and the
+/// palette keeps the right.
 pub fn visible(app: &SolveApp, ctx: &egui::Context) -> bool {
-    editing(app) && ((app.dialog.is_none() && app.tree.redefine.is_none()) || fits_beside_a_dialog(app, ctx))
+    editing(app) && ((app.dialog.is_none() && app.tree.redefine.is_none()) || fits_beside_a_dialog(app, ctx) || crate::dialog_column::holds(app))
 }
 
 /// The creation family of the tool that is running, and the exact variant it is running, when
@@ -512,6 +513,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         } else {
             set_mode(app, kind);
         }
+        // The button click would otherwise leave the shape's dimension box without the keyboard.
+        crate::sketch_dims::restore_box_focus(app, ctx);
     }
     if construction {
         toggle_construction(app);
@@ -738,7 +741,7 @@ mod tests {
         h.app.run("sketch.centerline", json!({"curves":[center],"value":true})).unwrap();
         // Which of Normal, Construction, Centerline and Infinite the palette shows pressed.
         let pressed = |h: &mut crate::scenario::Harness, ids: &[&String]| {
-            h.app.session.selection = ids.iter().map(|id| Sel::SketchCurve { id: (*id).clone() }).collect();
+            h.app.session.selection = ids.iter().map(|id| Sel::SketchCurve { id: (*id).clone(), sketch: None }).collect();
             h.settle();
             let tree = h.output.accesskit_update.as_ref().unwrap();
             ["normal", "construction", "centerline", "infinite"]

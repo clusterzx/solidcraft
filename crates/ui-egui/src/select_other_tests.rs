@@ -1,4 +1,5 @@
-//! Select Other: press and hold, the viewport menu's entry, click cycling and dialog inputs.
+//! Select Other: press and hold, the viewport menu's entry, click cycling and dialog inputs; and
+//! which of overlapping sketch curves a click picks.
 
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
@@ -20,12 +21,53 @@ fn two_lines() -> (Harness, Value) {
     (h, at)
 }
 
+/// Two short lines of the sketch's own (`a` on x 5–15, `b` on x 25–35) drawn along a projected
+/// line (x 0–40, y 0, a box edge below the sketch plane): the ids of `a`, `b` and the projected
+/// one, and screen points on `a`, on `b` and on the projected line alone.
+struct OnProjected {
+    h: Harness,
+    a: String,
+    b: String,
+    projected: String,
+    at_a: Value,
+    at_b: Value,
+    at_projected: Value,
+}
+
+fn own_lines_on_a_projected_line() -> OnProjected {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length":40,"width":10,"height":10,"corner":[0,0,-20]})).unwrap();
+    h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+    h.app.run("sketch.project", json!({"refs":[{"edge":[20,0,-10]}]})).unwrap();
+    for (x0, x1) in [(5, 15), (25, 35)] {
+        h.app.run("sketch.line", json!({"points":[[x0,0],[x1,0]],"infer":false,"connect":false})).unwrap();
+    }
+    h.app.cam.distance = 100.0;
+    h.settle();
+    let sk = h.app.session.doc.sketch(h.app.session.active_sketch.unwrap()).unwrap();
+    let projected: Vec<String> = sk.curves.iter().filter(|c| c.link.is_some()).map(|c| c.id.clone()).collect();
+    let own: Vec<String> = sk.curves.iter().filter(|c| c.link.is_none()).map(|c| c.id.clone()).collect();
+    assert_eq!((projected.len(), own.len()), (1, 2), "{:?}", sk.curves);
+    let at = |h: &mut Harness, x: f64| h.call("ui.at", json!({"sketch":[x,0]}))["result"].clone();
+    // Away from the midpoints (10, 30 and 20), which are picks of their own.
+    let (at_a, at_b, at_projected) = (at(&mut h, 7.0), at(&mut h, 27.0), at(&mut h, 2.0));
+    OnProjected { h, a: own[0].clone(), b: own[1].clone(), projected: projected[0].clone(), at_a, at_b, at_projected }
+}
+
+fn hovered_curve(h: &Harness) -> Option<String> {
+    match &h.app.viewport.hover {
+        Some(crate::viewport::Hit::SketchCurve { id, .. }) => Some(id.clone()),
+        _ => None,
+    }
+}
+
 fn labels(h: &Harness) -> Vec<String> {
     crate::select_other::describe(&h.app)["rows"].as_array().into_iter().flatten().filter_map(|r| r["label"].as_str().map(String::from)).collect()
 }
 
 fn curves(h: &Harness) -> Vec<String> {
-    h.app.session.selection.iter().filter_map(|s| if let Sel::SketchCurve { id } = s { Some(id.clone()) } else { None }).collect()
+    h.app.session.selection.iter().filter_map(|s| if let Sel::SketchCurve { id, .. } = s { Some(id.clone()) } else { None }).collect()
 }
 
 /// Two lines of the sketch's own apart from each other (`l1` on x 0–15, `l2` on x 25–40, at
@@ -49,7 +91,7 @@ fn two_lines_apart() -> (Harness, Value, Value) {
 fn row_of(h: &Harness, id: &str) -> usize {
     let rows = crate::select_other::describe(&h.app)["rows"].clone();
     let sels: Vec<Sel> = rows.as_array().into_iter().flatten().filter_map(|r| serde_json::from_value(r["sel"].clone()).ok()).collect();
-    sels.iter().position(|s| matches!(s, Sel::SketchCurve { id: x } if x == id)).unwrap_or_else(|| panic!("no row for {id}: {rows}"))
+    sels.iter().position(|s| matches!(s, Sel::SketchCurve { id: x, .. } if x == id)).unwrap_or_else(|| panic!("no row for {id}: {rows}"))
 }
 
 fn sorted(mut v: Vec<String>) -> Vec<String> {
@@ -81,6 +123,45 @@ fn holding_still_lists_both_coincident_lines_and_picks_the_one_underneath() {
     let mut got = curves(&h);
     got.sort();
     assert_eq!(got, ["l1", "l2"]);
+}
+
+/// #6396: a regular line drawn on part of a construction line is the one hovered and picked
+/// first, whichever was drawn first; clicking again (or Select Other) still reaches the
+/// construction line. A construction line clearly nearer the cursor still wins.
+#[test]
+fn a_regular_line_on_a_construction_line_is_picked_before_it() {
+    for construction_first in [true, false] {
+        let mut h = Harness::new();
+        h.app.set_origin_shown(false);
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        let cons = json!({"points":[[0,10],[20,10]],"infer":false,"connect":false,"construction":true,"ids":["c"]});
+        let line = json!({"points":[[5,10],[15,10]],"infer":false,"connect":false,"ids":["r"]});
+        for p in if construction_first { [cons, line] } else { [line, cons] } {
+            h.app.run("sketch.line", p).unwrap();
+        }
+        h.app.run("sketch.line", json!({"points":[[0,14],[20,14]],"infer":false,"connect":false,"construction":true,"ids":["near"]})).unwrap();
+        h.app.cam.distance = 60.0;
+        h.settle();
+        // Away from the shared midpoint (10, 10), which is a pick of its own.
+        let at = h.call("ui.at", json!({"sketch":[7,10]}))["result"].clone();
+        h.step(&json!({"move": at})).unwrap();
+        assert!(
+            matches!(&h.app.viewport.hover, Some(crate::viewport::Hit::SketchCurve { id, .. }) if id == "r"),
+            "construction first: {construction_first}: {:?}",
+            h.app.viewport.hover
+        );
+        h.step(&json!({"click": at})).unwrap();
+        assert_eq!(curves(&h), ["r"], "construction first: {construction_first}");
+        h.frames(30);
+        h.step(&json!({"click": at})).unwrap();
+        assert_eq!(curves(&h), ["c"], "the next click reaches the construction line");
+        // On the construction line alone, it is still the one picked.
+        h.app.session.selection.clear();
+        let on_near = h.call("ui.at", json!({"sketch":[7,14]}))["result"].clone();
+        h.frames(30);
+        h.step(&json!({"click": on_near})).unwrap();
+        assert_eq!(curves(&h), ["near"]);
+    }
 }
 
 #[test]
@@ -163,6 +244,25 @@ fn overlapping_bodies_list_both_and_the_hidden_one_can_be_picked() {
     let i = rows.iter().position(|r| r == "Body · Inner").unwrap();
     h.call("ui.selectOther", json!({"pick": i}));
     assert_eq!(h.app.session.selection, [Sel::Body { name: "Inner".into() }]);
+}
+
+/// Origin plane names (#6491): the list names an origin plane as the preferences do, and picking
+/// it still selects the plane by its id.
+#[test]
+fn origin_planes_are_listed_by_the_names_the_preferences_give_them() {
+    let mut h = Harness::new();
+    h.call("ui.view", json!({"view":"top"}));
+    h.settle();
+    h.step(&json!({"hold": {"plane": "XY"}})).unwrap();
+    assert!(labels(&h).iter().any(|r| r == "XY Plane"), "{:?}", labels(&h));
+    h.step(&json!({"key": "Escape"})).unwrap();
+    h.call("ui.prefs", json!({"origin_plane_names": "top_front_right"}));
+    h.step(&json!({"hold": {"plane": "XY"}})).unwrap();
+    let rows = labels(&h);
+    let row = rows.iter().position(|r| r == "Top Plane").unwrap_or_else(|| panic!("{rows:?}"));
+    assert!(!rows.iter().any(|r| r == "XY Plane"), "{rows:?}");
+    h.step(&json!({"click": {"handle": format!("select_other:{row}")}})).unwrap();
+    assert_eq!(h.app.session.selection, vec![Sel::Plane { name: "XY".into() }]);
 }
 
 #[test]
@@ -307,4 +407,211 @@ fn select_other_opened_with_shift_adds_its_choice_to_the_selection() {
     let i = row_of(&h, "l2");
     h.step(&json!({"click": {"handle": format!("select_other:{i}")}})).unwrap();
     assert_eq!(sorted(curves(&h)), ["l1", "l2"]);
+}
+
+#[test]
+fn a_click_picks_the_sketchs_own_curve_over_a_projected_one_under_it() {
+    let OnProjected { mut h, a, b, projected, at_a, at_b, at_projected } = own_lines_on_a_projected_line();
+    h.step(&json!({"move": at_a})).unwrap();
+    assert_eq!(hovered_curve(&h).as_ref(), Some(&a), "the hover shows what a click picks");
+    h.step(&json!({"click": at_a})).unwrap();
+    assert_eq!(curves(&h), std::slice::from_ref(&a));
+    h.frames(30);
+    h.step(&json!({"click": at_b, "shift": true})).unwrap();
+    assert_eq!(sorted(curves(&h)), sorted(vec![a.clone(), b.clone()]));
+    // Where nothing of the sketch's own is, the projected line is picked.
+    h.frames(30);
+    h.step(&json!({"move": at_projected})).unwrap();
+    assert_eq!(hovered_curve(&h).as_ref(), Some(&projected));
+    h.step(&json!({"click": at_projected})).unwrap();
+    assert_eq!(curves(&h), std::slice::from_ref(&projected));
+    // Select Other lists the sketch's own line first, and the projected one under it.
+    h.frames(30);
+    h.step(&json!({"hold": at_a})).unwrap();
+    assert!(row_of(&h, &a) < row_of(&h, &projected), "{:?}", labels(&h));
+    h.step(&json!({"click": {"handle": format!("select_other:{}", row_of(&h, &projected))}})).unwrap();
+    assert_eq!(curves(&h), [projected]);
+}
+
+/// Three plates stacked along Z (made bottom, top, middle, so model order isn't depth order),
+/// the top one smallest, held over the top plate's edge from above.
+fn stacked_plates() -> Harness {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length":30,"width":30,"height":2,"corner":[-15,-15,0],"body_name":"Bottom"})).unwrap();
+    h.app.run("solid.box", json!({"length":10,"width":10,"height":2,"corner":[-5,-5,20],"body_name":"Top"})).unwrap();
+    h.app.run("solid.box", json!({"length":20,"width":20,"height":2,"corner":[-10,-10,10],"body_name":"Middle"})).unwrap();
+    h.call("ui.view", json!({"view":"top"}));
+    h.call("ui.view", json!({"view":"fit"}));
+    h
+}
+
+#[test]
+fn stacked_bodies_list_front_to_back_one_body_at_a_time() {
+    let mut h = stacked_plates();
+    h.step(&json!({"hold": {"world": [4.9, 0, 22]}})).unwrap();
+    let rows = labels(&h);
+    // Each row's body, in list order: one body at a time, the nearest first (#5345).
+    let bodies: Vec<&str> = rows.iter().filter_map(|r| r.rsplit(" · ").next()).collect();
+    let mut runs = bodies.clone();
+    runs.dedup();
+    assert_eq!(runs, ["Top", "Middle", "Bottom"], "front to back, each body's rows together: {rows:?}");
+    // Within a body: the edge under the pointer, then its face, then the body itself.
+    assert!(rows[0].starts_with("Edge ") && rows[0].ends_with("· Top"), "{rows:?}");
+    for body in ["Top", "Middle", "Bottom"] {
+        let mine: Vec<&String> = rows.iter().filter(|r| r.ends_with(&format!("· {body}"))).collect();
+        assert!(mine.iter().any(|r| r.starts_with("Face ")), "{body}: {rows:?}");
+        assert_eq!(mine.last().map(|r| r.as_str()), Some(format!("Body · {body}").as_str()), "{rows:?}");
+    }
+}
+
+#[test]
+fn an_edge_is_as_deep_as_its_point_under_the_pointer_not_its_middle() {
+    let mut h = stacked_plates();
+    h.call("ui.view", json!({"view":"iso"}));
+    h.call("ui.view", json!({"view":"fit"}));
+    h.settle();
+    // On the bottom plate's near top edge along Y (x = 15, y from -15 to 15), well off its middle.
+    let under = solidcraft_engine::geom::Vec3::new(15.0, 9.0, 2.0);
+    let at = h.call("ui.at", json!({"world": [under.x, under.y, under.z]}))["result"].clone();
+    let pos = egui::pos2(at[0].as_f64().unwrap() as f32, at[1].as_f64().unwrap() as f32);
+    let proj = crate::viewport::projection(&h.app, h.app.viewport.rect.unwrap());
+    let hits = crate::viewport::pick_all(&h.app, &proj, pos);
+    let edge = hits.iter().find(|x| matches!(x, crate::viewport::Hit::Edge { body, .. } if body == "Bottom")).expect("the edge");
+    let (o, d) = proj.ray(pos);
+    let st = crate::open_meshing::shown_world(&h.app);
+    let index = st.bodies.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
+    let t = super::hit_depth(&st, &index, o, d, edge).expect("a depth");
+    let want = (under - o).dot(d);
+    let mid = solidcraft_engine::geom::Vec3::new(15.0, 0.0, 2.0);
+    assert!((t - want).abs() < 0.5, "depth {t}, the point under the pointer {want}, its middle {}", (mid - o).dot(d));
+}
+
+/// The navigation bar's Orbit, Pan and Zoom: each one's slot and the mode it lights.
+fn lit_modes() -> [(&'static str, crate::viewport::NavMode); 3] {
+    use crate::viewport::NavMode;
+    [("orbit", NavMode::Orbit), ("pan", NavMode::Pan), ("zoom", NavMode::Zoom)]
+}
+
+/// Screen point `at` moved by `d` points right and down.
+fn offset(at: &Value, d: f64) -> Value {
+    json!([at[0].as_f64().unwrap_or_default() + d, at[1].as_f64().unwrap_or_default() + d])
+}
+
+/// A mode lit in the navigation bar owns left drags, not a press held still: the hold opens
+/// the list as it does with no mode lit, and a plain click still selects.
+#[test]
+fn holding_still_opens_the_list_while_a_navigation_mode_is_lit() {
+    for (slot, mode) in lit_modes() {
+        let (mut h, at) = two_lines();
+        h.step(&json!({"click": {"handle": format!("nav:slot:{slot}")}})).unwrap();
+        assert_eq!(h.app.viewport.nav, Some(mode), "{slot} is lit");
+        let cam = h.app.cam;
+        h.step(&json!({"hold": at})).unwrap();
+        assert!(crate::select_other::is_open(&h.app), "a held press opens Select Other with {slot} lit");
+        assert_eq!(h.app.cam, cam, "{slot}: holding still did not move the view");
+        assert!(h.app.session.selection.is_empty(), "{slot}: {:?}", h.app.session.selection);
+        h.step(&json!({"click": {"handle": "select_other:1"}})).unwrap();
+        assert_eq!(curves(&h), ["l2"], "{slot}");
+        h.app.session.selection.clear();
+        h.step(&json!({"click": at})).unwrap();
+        assert_eq!(curves(&h).len(), 1, "{slot}: a click still selects");
+        assert_eq!(h.app.viewport.nav, Some(mode), "{slot} stays lit");
+    }
+}
+
+/// A drag under a lit mode still moves the view and does not open the list, whether it starts
+/// at once or after the press was held still for longer than egui waits to call it a drag.
+#[test]
+fn a_drag_under_a_lit_navigation_mode_moves_the_view_and_opens_nothing() {
+    for (slot, _) in lit_modes() {
+        let (mut h, at) = two_lines();
+        h.step(&json!({"click": {"handle": format!("nav:slot:{slot}")}})).unwrap();
+        let cam = h.app.cam;
+        h.step(&json!({"drag": [at, offset(&at, 40.0)]})).unwrap();
+        assert_ne!(h.app.cam, cam, "{slot}: the drag moved the view");
+        assert!(!crate::select_other::is_open(&h.app), "{slot}: a drag does not open Select Other");
+        assert!(h.app.session.selection.is_empty(), "{slot}: {:?}", h.app.session.selection);
+    }
+}
+
+/// A preset's modifier chord is a gesture to navigate from the press on: Maya's Alt+left held
+/// still on overlapping lines does not open the list, unlike a mode lit in the navigation bar.
+#[test]
+fn a_preset_chord_held_still_does_not_open_the_list() {
+    let (mut h, at) = two_lines();
+    h.app.preferences.nav = "maya".into();
+    let (x, y) = (at[0].as_f64().unwrap_or_default(), at[1].as_f64().unwrap_or_default());
+    h.call("ui.drag", json!({"x0": x, "y0": y, "x1": x, "y1": y, "steps": 1, "hold": 40, "alt": true}));
+    h.settle();
+    assert!(!crate::select_other::is_open(&h.app), "Maya Alt+left held still navigates, it does not open Select Other");
+}
+
+/// Once the list is open, the press it came from does not turn into a drag of the view at
+/// egui's 0.8 s mark: the camera stays put under the open list while the pointer moves to a row.
+#[test]
+fn a_press_that_opened_the_list_does_not_move_the_view_when_it_moves_on() {
+    for (slot, _) in lit_modes() {
+        let (mut h, at) = two_lines();
+        h.step(&json!({"click": {"handle": format!("nav:slot:{slot}")}})).unwrap();
+        let cam = h.app.cam;
+        let (x, y) = (at[0].as_f64().unwrap_or_default(), at[1].as_f64().unwrap_or_default());
+        h.call("ui.drag", json!({"x0": x, "y0": y, "x1": x + 40.0, "y1": y + 40.0, "steps": 8, "hold": 60}));
+        h.settle();
+        assert!(crate::select_other::is_open(&h.app), "{slot}: the list stays open");
+        assert_eq!(h.app.cam, cam, "{slot}: the view did not move under the open list");
+    }
+}
+
+/// Zooming out does not make a click reach through the body. The pixel of the box's hidden far
+/// corner is on the near +X face, so every distance picks something standing on that face —
+/// the face, or one of its edges or corners once the box is small on screen — never the far
+/// side behind it. The occlusion slack used to be cut from the camera's distance, so far
+/// enough out the whole body fitted inside it.
+#[test]
+fn a_zoomed_out_click_picks_the_near_face_not_an_edge_through_the_body() {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"corner":[-5,-5,-5]})).unwrap();
+    for distance in [40.0, 300.0, 1000.0, 3000.0] {
+        h.app.cam.distance = distance;
+        h.settle();
+        let at = h.at(&json!({"world": [0, 5, -5]})).unwrap();
+        let proj = crate::viewport::projection(&h.app, h.app.viewport.rect.unwrap());
+        let hits = crate::viewport::pick(&h.app, &proj, egui::pos2(at[0] as f32, at[1] as f32));
+        let first = hits.first().expect("the box is under the cursor");
+        let point = match first {
+            crate::viewport::Hit::Face { point, .. } | crate::viewport::Hit::Vertex { point, .. } => *point,
+            crate::viewport::Hit::Edge { mid, .. } => *mid,
+            other => panic!("at {distance} mm away the box is not picked: {other:?}"),
+        };
+        assert!(point.x > 4.9, "at {distance} mm away the pick is behind the near face: {first:?}");
+    }
+}
+
+/// A small part on a large one is picked by its own size, not the assembly's: the 2 mm box's
+/// far corner is 2 mm behind its near face, and a slack cut from the 200 mm plate (or from the
+/// camera) reached straight through it — the kraken board's 2.54 mm connectors picked their far
+/// side from 5 mm behind.
+#[test]
+fn a_small_body_on_a_large_one_is_not_picked_through() {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length":200,"width":200,"height":10,"corner":[-100,-100,-10]})).unwrap();
+    h.app.run("solid.box", json!({"length":2,"width":2,"height":2,"corner":[-1,-1,0]})).unwrap();
+    for distance in [20.0, 100.0, 600.0] {
+        h.app.cam.distance = distance;
+        h.settle();
+        // The small box's far bottom corner, whose pixel is on its near +X face.
+        let at = h.at(&json!({"world": [0, 1, 0]})).unwrap();
+        let proj = crate::viewport::projection(&h.app, h.app.viewport.rect.unwrap());
+        let hits = crate::viewport::pick(&h.app, &proj, egui::pos2(at[0] as f32, at[1] as f32));
+        let first = hits.first().expect("the small box is under the cursor");
+        let point = match first {
+            crate::viewport::Hit::Face { point, .. } | crate::viewport::Hit::Vertex { point, .. } => *point,
+            crate::viewport::Hit::Edge { mid, .. } => *mid,
+            other => panic!("at {distance} mm away the small box is not picked: {other:?}"),
+        };
+        assert!(point.x > 0.9, "at {distance} mm away the pick is behind the near face: {first:?}");
+    }
 }

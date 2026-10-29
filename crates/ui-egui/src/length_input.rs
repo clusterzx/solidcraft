@@ -32,6 +32,12 @@ pub(crate) fn defaults(doc: &Document, mut kind: crate::dialogs::Kind) -> crate:
 /// Keep named and dimensional expressions intact so they remain driving expressions.
 pub(crate) fn expression(doc: &Document, text: &str, kind: Kind) -> String {
     let text = text.trim();
+    // A definition's value is frozen the same way; the name stays (#4071).
+    if let Some((name, rhs)) = solidcraft_engine::doc::expr::definition(text)
+        && !rhs.is_empty()
+    {
+        return format!("{name} = {}", expression(doc, rhs, kind));
+    }
     let normalized = doc.with_design_unit(text, kind);
     if kind == Kind::Length && unit(doc) != "mm" && normalized == text && doc.eval(text, Kind::Unitless).is_ok() {
         // A decimal comma is numeric only outside parentheses. Preserve function-argument
@@ -55,6 +61,15 @@ pub(crate) fn expression(doc: &Document, text: &str, kind: Kind) -> String {
         format!("({grouped}) * 1 {}", unit(doc))
     } else {
         normalized
+    }
+}
+
+/// For a field whose command takes only a number, which keeps no expression to name: a typed
+/// `name = value` is refused with the way to name it, rather than defining nothing (#4071).
+pub(crate) fn no_definition(text: &str, label: &str) -> Result<(), String> {
+    match solidcraft_engine::doc::expr::definition(text) {
+        Some((name, _)) => Err(format!("{label} keeps no expression, so it cannot define `{name}`: add `{name}` in Parameters, then type `{name}`")),
+        None => Ok(()),
     }
 }
 
@@ -100,7 +115,7 @@ pub(crate) fn fields<'a>(doc: &Document, kind: &'a mut crate::dialogs::Kind) -> 
         D::Thread { length, .. } | D::Emboss { depth: length, .. } => vec![length],
         D::Rib { thickness, depth, .. } => vec![thickness, depth],
         D::PathPattern { spacing, .. } => vec![spacing],
-        D::Pipe { diameter, wall } => vec![diameter, wall],
+        D::Pipe { diameter, wall, .. } => vec![diameter, wall],
         D::Stock { margin } => vec![margin],
         D::Move { x, y, z, .. } => vec![x, y, z],
         D::Hole { diameter, depth, cb_diameter, cb_depth, cs_diameter, .. } => vec![diameter, depth, cb_diameter, cb_depth, cs_diameter],
@@ -130,7 +145,9 @@ pub(crate) fn fields<'a>(doc: &Document, kind: &'a mut crate::dialogs::Kind) -> 
                 vec![diameter, height, hole_diameter, hole_depth, fillet, rib_thickness, rib_length, rib_offset]
             }
             Pl::Lip { width, height, gap, .. } => vec![width, height, gap],
-            Pl::SnapFit { length, thickness, width, catch_depth, catch_length, .. } => vec![length, thickness, width, catch_depth, catch_length],
+            Pl::SnapFit { length, thickness, width, catch_depth, catch_length, base_height, .. } => {
+                vec![length, thickness, width, catch_depth, catch_length, base_height]
+            }
             Pl::Rest { width, length, height, thickness, .. } => vec![width, length, height, thickness],
             Pl::Rules { values, .. } => {
                 let kinds = solidcraft_engine::doc::plastic::PlasticRule::library()
