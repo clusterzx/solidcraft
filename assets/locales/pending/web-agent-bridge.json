@@ -1,0 +1,32 @@
+{
+  "ar": {
+    "web.agent.connected": "وكيل الذكاء الاصطناعي متصل",
+    "web.agent.connecting": "جارٍ الاتصال بخادم ترحيل وكيل الذكاء الاصطناعي…",
+    "web.agent.disconnect": "قطع الاتصال",
+    "web.agent.hint": "يمكن لوكيل الذكاء الاصطناعي تغيير التصميم في هذا التبويب عبر خادم الترحيل. أبقِ هذا التبويب في المقدمة أثناء عمله.",
+    "web.agent.reconnect": "إعادة الاتصال",
+    "web.agent.refused": "رفض خادم ترحيل وكيل الذكاء الاصطناعي رمز هذا التبويب",
+    "web.agent.replaced": "تولّى تبويب آخر اتصال وكيل الذكاء الاصطناعي",
+    "web.agent.retrying": "تعذّر الوصول إلى خادم ترحيل وكيل الذكاء الاصطناعي؛ جارٍ المحاولة مجددًا"
+  },
+  "he": {
+    "web.agent.connected": "סוכן הבינה המלאכותית מחובר",
+    "web.agent.connecting": "מתחבר לשרת הממסר של סוכן הבינה המלאכותית…",
+    "web.agent.disconnect": "ניתוק",
+    "web.agent.hint": "סוכן בינה מלאכותית יכול לשנות את התכן בלשונית זו דרך שרת הממסר. יש להשאיר לשונית זו בחזית בזמן שהוא עובד.",
+    "web.agent.reconnect": "התחברות מחדש",
+    "web.agent.refused": "שרת הממסר של סוכן הבינה המלאכותית דחה את האסימון של לשונית זו",
+    "web.agent.replaced": "לשונית אחרת השתלטה על החיבור לסוכן הבינה המלאכותית",
+    "web.agent.retrying": "אין גישה לשרת הממסר של סוכן הבינה המלאכותית; מנסה שוב"
+  },
+  "vi": {
+    "web.agent.connected": "Đã kết nối AI agent",
+    "web.agent.connecting": "Đang kết nối tới relay của AI agent…",
+    "web.agent.disconnect": "Ngắt kết nối",
+    "web.agent.hint": "AI agent có thể thay đổi thiết kế trong thẻ này qua relay. Hãy giữ thẻ này ở phía trước trong khi agent làm việc.",
+    "web.agent.reconnect": "Kết nối lại",
+    "web.agent.refused": "Relay của AI agent đã từ chối token của thẻ này",
+    "web.agent.replaced": "Một thẻ khác đã nhận kết nối AI agent",
+    "web.agent.retrying": "Không kết nối được relay của AI agent; đang thử lại"
+  }
+}
