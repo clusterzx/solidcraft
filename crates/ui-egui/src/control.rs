@@ -2165,7 +2165,7 @@ mod tests {
             let (req, _rx) = ControlRequest::new("engine.execute", params);
             match handle(&mut app, &crate::fonts::test_context(), &req) {
                 Outcome::Done(v) => v,
-                Outcome::Screenshot { path } => json!({"ok": true, "screenshot": path}),
+                Outcome::Screenshot { path, .. } => json!({"ok": true, "screenshot": path}),
             }
         };
         let designs = json!([proj.to_string_lossy()]);
