@@ -267,6 +267,13 @@ pub fn page(app: &mut SolveApp, ui: &mut egui::Ui) {
             crate::scenario::publish_handle("prefs:connect_ai_apps", response.rect.center());
         }
         if cfg!(target_arch = "wasm32") {
+            // The browser build with threads computes an agent's commands on a worker too
+            // (docs/web-threads.md); without threads there is nothing to turn on.
+            if solidcraft_thread::available() {
+                let response = ui_kit::checkbox(ui, tr("ai.prefs.background_commands"), &mut app.preferences.agent_off_thread)
+                    .on_hover_text(tr("ui.agent_off_thread_note"));
+                crate::scenario::publish_handle("prefs:agent_off_thread", response.rect.center());
+            }
             ui_kit::text(ui, tr("ui.agent_chat_desktop_only"), ui_kit::Text::Hint("desktop"));
         }
     });

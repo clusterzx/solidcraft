@@ -3,7 +3,7 @@
 The desktop app computes slow work beside its window, so the window keeps drawing while it runs:
 - a feature dialog's OK and its live preview;
 - the history marker, undo and redo, and a delete's check;
-- an agent's commands (Preferences ▸ AI ▸ *Keep the window responsive while agents run commands*);
+- an agent's commands (Settings ▸ Assistant ▸ *Run agent commands in the background*, `agent_off_thread`, off by default; the browser shows it where it has threads);
 - Save;
 - the display meshes of a design that has just opened;
 - the picking index and the levels of detail of large meshes.
